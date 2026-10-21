@@ -1,0 +1,1 @@
+"""Authorized job source connectors."""
