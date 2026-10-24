@@ -1,7 +1,9 @@
 from datetime import timedelta
+import os
+from uuid import uuid4
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from buscadin_bot.db.models import (
@@ -13,9 +15,24 @@ from buscadin_bot.services.publication_policy import PublicationRejected
 from buscadin_bot.services.site_publications import PublicationConflict, SitePublicationService
 
 
-@pytest.fixture
-async def catalogue(tmp_path):
-    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'catalogue.db'}")
+@pytest.fixture(params=["sqlite"] + (["postgresql"] if os.environ.get("BUSCADIN_TEST_POSTGRES_URL") else []))
+async def catalogue(tmp_path, request):
+    admin_engine = None
+    if request.param == "postgresql":
+        url = os.environ["BUSCADIN_TEST_POSTGRES_URL"]
+        schema = "test_publication_" + uuid4().hex
+        admin_engine = create_async_engine(url)
+        async with admin_engine.begin() as connection:
+            await connection.execute(text(f'CREATE SCHEMA "{schema}"'))
+        engine = create_async_engine(url, connect_args={"server_settings": {"search_path": schema}})
+    else:
+        engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'catalogue.db'}")
+    async def cleanup():
+        await engine.dispose()
+        if admin_engine is not None:
+            async with admin_engine.begin() as connection:
+                await connection.execute(text(f'DROP SCHEMA "{schema}" CASCADE'))
+            await admin_engine.dispose()
     await init_db(engine)
     sessions = create_session_factory(engine)
     async with sessions.begin() as session:
@@ -29,8 +46,10 @@ async def catalogue(tmp_path):
         await session.flush()
         job_id = job.id
     service = SitePublicationService(sessions, admin_actor="123", official_domains=["jobs.example"])
-    yield service, sessions, job_id
-    await engine.dispose()
+    try:
+        yield service, sessions, job_id
+    finally:
+        await cleanup()
 
 
 async def preview(service, job_id, destination_type="OFFICIAL"):

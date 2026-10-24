@@ -1,4 +1,5 @@
 import importlib.util
+import os
 
 import pytest
 from sqlalchemy import select
@@ -52,3 +53,37 @@ async def test_migration_preserves_ids_is_idempotent_and_skips_site_tables(tmp_p
         assert await session.scalar(select(SitePublication)) is None
     await source.dispose()
     await destination.dispose()
+
+
+@pytest.mark.asyncio
+async def test_postgresql_import_advances_sequences(tmp_path):
+    destination_url = os.environ.get("BUSCADIN_TEST_POSTGRES_URL")
+    if not destination_url:
+        pytest.skip("requires a fresh disposable PostgreSQL database")
+    source_url = f"sqlite+aiosqlite:///{tmp_path / 'pg_source.db'}"
+    source = create_async_engine(source_url)
+    destination = create_async_engine(destination_url)
+    try:
+        await init_db(source)
+        await init_db(destination)
+        async with create_session_factory(source).begin() as session:
+            for job_id in (1, 42):
+                session.add(Job(id=job_id, source="migration-test", source_job_id=str(job_id),
+                                source_url="https://example.com/job", application_url="https://example.com/apply",
+                                title="Synthetic job", company="Example"))
+        module = _migration_module()
+        await module.migrate(source_url, destination_url, dry_run=True)
+        async with create_session_factory(destination)() as session:
+            assert await session.get(Job, 1) is None
+        await module.migrate(source_url, destination_url)
+        await module.migrate(source_url, destination_url)
+        async with create_session_factory(destination).begin() as session:
+            job = Job(source="migration-test", source_job_id="new", title="New job", company="Example",
+                      source_url="https://example.com/new", application_url="https://example.com/apply")
+            session.add(job)
+            await session.flush()
+            assert job.id > 42
+            assert (await session.get(Job, 1)).title == "Synthetic job"
+    finally:
+        await source.dispose()
+        await destination.dispose()

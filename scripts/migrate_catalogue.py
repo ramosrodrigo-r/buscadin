@@ -13,7 +13,7 @@ import asyncio
 from collections import Counter
 from typing import Any
 
-from sqlalchemy import inspect, select
+from sqlalchemy import inspect, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from buscadin_bot.db.models import (
@@ -44,6 +44,10 @@ async def migrate(source_url: str, destination_url: str, *, dry_run: bool = Fals
         async with source_sessions() as source, destination_sessions() as destination:
             transaction = await destination.begin()
             try:
+                if destination_engine.dialect.name == "postgresql":
+                    # Keep writers out until explicit IDs and sequences agree.
+                    for model in LEGACY_MODELS:
+                        await destination.execute(text(f'LOCK TABLE "{model.__tablename__}" IN ACCESS EXCLUSIVE MODE'))
                 for model in LEGACY_MODELS:
                     rows = list((await source.scalars(select(model).order_by(*model.__table__.primary_key.columns))).all())
                     for row in rows:
@@ -69,6 +73,23 @@ async def migrate(source_url: str, destination_url: str, *, dry_run: bool = Fals
                 if dry_run:
                     await transaction.rollback()
                 else:
+                    if destination_engine.dialect.name == "postgresql":
+                        await destination.flush()
+                        for model in LEGACY_MODELS:
+                            columns = list(model.__table__.primary_key.columns)
+                            if len(columns) != 1 or columns[0].name != "id":
+                                continue
+                            table = model.__tablename__
+                            sequence = await destination.scalar(text("SELECT pg_get_serial_sequence(:table, 'id')"), {"table": table})
+                            if sequence is None:
+                                continue
+                            # Sequence names come from PostgreSQL, never user input.
+                            quoted = '.'.join('"' + part.replace('"', '""') + '"' for part in sequence.split('.'))
+                            last = await destination.scalar(text(f'SELECT last_value FROM {quoted}'))
+                            maximum = await destination.scalar(text(f'SELECT max(id) FROM "{table}"'))
+                            restart = max(last or 0, maximum or 0) + 1
+                            # Unlike setval, RESTART rolls back with the import.
+                            await destination.execute(text(f'ALTER SEQUENCE {quoted} RESTART WITH {restart}'))
                     await transaction.commit()
             except Exception:
                 await transaction.rollback()
