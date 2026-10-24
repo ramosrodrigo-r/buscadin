@@ -1,0 +1,620 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Buscadin — contrato privado de publicação",
+    "version": "0.1.0",
+    "description": "Contrato privado implementado pelo portal. Não expor /internal/* sem autenticação Bearer e identidade Telegram. A API pública é HTML server-rendered; ingestão e gestão de links continuam no bot e no contrato editorial."
+  },
+  "paths": {
+    "/internal/jobs/{job_id}/publication-preview": {
+      "post": {
+        "summary": "Criar prévia privada; nunca publica",
+        "parameters": [
+          {
+            "name": "X-Telegram-Actor",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "ID Telegram autorizado; backend verifica identidade além do token de serviço."
+          },
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        ],
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Resultado persistido; mutações respondem somente após commit.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SitePreviewResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Token inválido"
+          },
+          "403": {
+            "description": "Administrador não autorizado"
+          },
+          "404": {
+            "description": "Registro não encontrado"
+          },
+          "409": {
+            "description": "Versão/conteúdo alterado; nova prévia necessária"
+          },
+          "422": {
+            "description": "Dados, destino ou elegibilidade inválidos"
+          },
+          "429": {
+            "description": "Limite de requisições"
+          },
+          "503": {
+            "description": "Serviço indisponível"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PreviewRequest"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/site-previews/{token}/confirm": {
+      "post": {
+        "summary": "Confirmar a prévia; token identifica decisão idempotente",
+        "parameters": [
+          {
+            "name": "X-Telegram-Actor",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "ID Telegram autorizado; backend verifica identidade além do token de serviço."
+          },
+          {
+            "name": "token",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{24}$"
+            }
+          }
+        ],
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Resultado persistido; mutações respondem somente após commit.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SiteStatusResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Token inválido"
+          },
+          "403": {
+            "description": "Administrador não autorizado"
+          },
+          "404": {
+            "description": "Registro não encontrado"
+          },
+          "409": {
+            "description": "Versão/conteúdo alterado; nova prévia necessária"
+          },
+          "422": {
+            "description": "Dados, destino ou elegibilidade inválidos"
+          },
+          "429": {
+            "description": "Limite de requisições"
+          },
+          "503": {
+            "description": "Serviço indisponível"
+          }
+        }
+      }
+    },
+    "/internal/jobs/{job_id}/publication": {
+      "get": {
+        "summary": "Consultar estado atual, mesmo após resposta perdida",
+        "parameters": [
+          {
+            "name": "X-Telegram-Actor",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "ID Telegram autorizado; backend verifica identidade além do token de serviço."
+          },
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        ],
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Resultado persistido; mutações respondem somente após commit.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SiteStatusResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Token inválido"
+          },
+          "403": {
+            "description": "Administrador não autorizado"
+          },
+          "404": {
+            "description": "Registro não encontrado"
+          },
+          "409": {
+            "description": "Versão/conteúdo alterado; nova prévia necessária"
+          },
+          "422": {
+            "description": "Dados, destino ou elegibilidade inválidos"
+          },
+          "429": {
+            "description": "Limite de requisições"
+          },
+          "503": {
+            "description": "Serviço indisponível"
+          }
+        }
+      }
+    },
+    "/internal/jobs/{job_id}/unpublish": {
+      "post": {
+        "summary": "Retirar com versão esperada e event_id idempotente",
+        "parameters": [
+          {
+            "name": "X-Telegram-Actor",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "ID Telegram autorizado; backend verifica identidade além do token de serviço."
+          },
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        ],
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Resultado persistido; mutações respondem somente após commit.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SiteStatusResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Token inválido"
+          },
+          "403": {
+            "description": "Administrador não autorizado"
+          },
+          "404": {
+            "description": "Registro não encontrado"
+          },
+          "409": {
+            "description": "Versão/conteúdo alterado; nova prévia necessária"
+          },
+          "422": {
+            "description": "Dados, destino ou elegibilidade inválidos"
+          },
+          "429": {
+            "description": "Limite de requisições"
+          },
+          "503": {
+            "description": "Serviço indisponível"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UnpublishRequest"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/jobs/{job_id}/requirements": {
+      "post": {
+        "summary": "Registrar requisitos explícitos sem alterar snapshot aprovado",
+        "parameters": [
+          {
+            "name": "X-Telegram-Actor",
+            "in": "header",
+            "required": true,
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "integer", "minimum": 1 }
+          }
+        ],
+        "security": [{ "ServiceToken": [] }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/RequirementsRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Fatos atualizados e auditados; nova publicação exige nova prévia.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/RequirementsResponse" }
+              }
+            }
+          },
+          "401": { "description": "Token inválido" },
+          "403": { "description": "Administrador não autorizado" },
+          "404": { "description": "Vaga não encontrada" },
+          "422": { "description": "Status ou evidência inválidos" }
+        }
+      }
+    },
+    "/internal/jobs": {
+      "get": {
+        "summary": "Listar vinte vagas por página",
+        "parameters": [
+          {
+            "name": "X-Telegram-Actor",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "ID Telegram autorizado; backend verifica identidade além do token de serviço."
+          },
+          {
+            "name": "site_status",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "NAO_PUBLICADA",
+                "PUBLICADA",
+                "DESPUBLICADA"
+              ]
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 1
+            }
+          }
+        ],
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Resultado persistido; mutações respondem somente após commit.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Token inválido"
+          },
+          "403": {
+            "description": "Administrador não autorizado"
+          },
+          "404": {
+            "description": "Registro não encontrado"
+          },
+          "409": {
+            "description": "Versão/conteúdo alterado; nova prévia necessária"
+          },
+          "422": {
+            "description": "Dados, destino ou elegibilidade inválidos"
+          },
+          "429": {
+            "description": "Limite de requisições"
+          },
+          "503": {
+            "description": "Serviço indisponível"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "ServiceToken": {
+        "type": "http",
+        "scheme": "bearer"
+      }
+    },
+    "schemas": {
+      "SitePreviewResponse": {
+        "properties": {
+          "token": {
+            "pattern": "^[a-f0-9]{24}$",
+            "title": "Token",
+            "type": "string"
+          },
+          "job_id": {
+            "exclusiveMinimum": 0,
+            "title": "Job Id",
+            "type": "integer"
+          },
+          "expected_version": {
+            "minimum": 0,
+            "title": "Expected Version",
+            "type": "integer"
+          },
+          "public": {
+            "additionalProperties": true,
+            "title": "Public",
+            "type": "object"
+          },
+          "destination_type": {
+            "enum": [
+              "OFFICIAL",
+              "REFERRAL"
+            ],
+            "title": "Destination Type",
+            "type": "string"
+          },
+          "destination_url": {
+            "title": "Destination Url",
+            "type": "string"
+          },
+          "expires_at": {
+            "title": "Expires At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "token",
+          "job_id",
+          "expected_version",
+          "public",
+          "destination_type",
+          "destination_url",
+          "expires_at"
+        ],
+        "title": "SitePreviewResponse",
+        "type": "object"
+      },
+      "SiteStatusResponse": {
+        "properties": {
+          "job_id": {
+            "exclusiveMinimum": 0,
+            "title": "Job Id",
+            "type": "integer"
+          },
+          "version": {
+            "minimum": 0,
+            "title": "Version",
+            "type": "integer"
+          },
+          "status": {
+            "enum": [
+              "NAO_PUBLICADA",
+              "PUBLICADA",
+              "DESPUBLICADA"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "application_suspended": {
+            "default": false,
+            "title": "Application Suspended",
+            "type": "boolean"
+          },
+          "public_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Public Url"
+          }
+        },
+        "required": [
+          "job_id",
+          "version",
+          "status",
+          "title"
+        ],
+        "title": "SiteStatusResponse",
+        "type": "object"
+      },
+      "PreviewRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "destination_type",
+          "summary"
+        ],
+        "properties": {
+          "destination_type": {
+            "type": "string",
+            "enum": [
+              "OFFICIAL",
+              "REFERRAL"
+            ]
+          },
+          "summary": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 12000
+          }
+        }
+      },
+      "UnpublishRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "expected_version",
+          "event_id",
+          "reason"
+        ],
+        "properties": {
+          "expected_version": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "event_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      },
+      "RequirementFact": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["status"],
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": ["required", "not_required", "unknown"]
+          },
+          "evidence": {
+            "type": ["string", "null"],
+            "maxLength": 2000
+          }
+        }
+      },
+      "RequirementsRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["requirements"],
+        "properties": {
+          "requirements": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["education", "experience"],
+            "properties": {
+              "education": { "$ref": "#/components/schemas/RequirementFact" },
+              "experience": { "$ref": "#/components/schemas/RequirementFact" }
+            }
+          }
+        }
+      },
+      "RequirementsResponse": {
+        "type": "object",
+        "required": ["job_id", "title", "requirements"],
+        "properties": {
+          "job_id": { "type": "integer", "minimum": 1 },
+          "title": { "type": "string" },
+          "requirements": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string",
+              "enum": ["required", "not_required", "unknown"]
+            }
+          }
+        }
+      },
+      "JobList": {
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "maxItems": 20,
+            "items": {
+              "$ref": "#/components/schemas/SiteStatusResponse"
+            }
+          }
+        }
+      }
+    }
+  }
+}

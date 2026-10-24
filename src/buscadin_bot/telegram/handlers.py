@@ -21,8 +21,10 @@ from buscadin_bot.db.models import (
 )
 from buscadin_bot.services.editorial import prepare_editorial_text, set_editorial_status
 from buscadin_bot.services.referrals import ReferralResolver
+from buscadin_bot.services.publication_gateway import PublicationGateway
 from buscadin_bot.telegram.api import TelegramClient
 from buscadin_bot.telegram.formatters import format_job_message, job_keyboard
+from buscadin_bot.telegram.site_handlers import handle_site_update
 
 LINK_FLOW_PREFIX = "link_flow:"
 LINK_FLOW_TTL = timedelta(minutes=10)
@@ -47,11 +49,15 @@ async def handle_update(
     session: AsyncSession,
     telegram: TelegramClient,
     settings: Settings,
+    site_gateway: PublicationGateway | None = None,
 ) -> None:
     if not is_authorized_update(update, settings):
         callback = update.get("callback_query")
         if isinstance(callback, dict) and callback.get("id"):
             await telegram.answer_callback_query(str(callback["id"]), "Não autorizado")
+        return
+
+    if await handle_site_update(update, session=session, telegram=telegram, settings=settings, gateway=site_gateway):
         return
 
     callback = update.get("callback_query")
@@ -490,6 +496,12 @@ def _help_text() -> str:
         "/vincular <vaga> [programa] — cadastrar link oficial\n"
         "/publicar <id> [canal] [url] — registrar publicação\n"
         "/programas — programas ativos\n"
+        "/site <id> — estado da publicação no site\n"
+        "/publicar_site <id> <oficial|indicacao> — preparar publicação\n"
+        "/atualizar_site <id> <oficial|indicacao> — preparar atualização\n"
+        "/despublicar_site <id> — retirar do site\n"
+        "/pendentes_site [página] — ainda não publicadas\n"
+        "/publicadas_site [página] — catálogo publicado\n"
         "/cancelar — cancelar fluxo atual"
     )
 

@@ -8,9 +8,10 @@ from urllib.parse import urlparse
 from sqlalchemy import select
 
 from buscadin_bot.config import get_settings
-from buscadin_bot.db.models import Job, Referral, ReferralLink, ReferralProgram, utcnow
+from buscadin_bot.db.models import AuditEvent, Job, Referral, ReferralLink, ReferralProgram, utcnow
 from buscadin_bot.db.session import close_engine, create_engine, create_session_factory, init_db
 from buscadin_bot.services.referrals import ReferralResolver
+from buscadin_bot.services.requirements import JobRequirements, RequirementFact
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -65,6 +66,15 @@ def build_parser() -> argparse.ArgumentParser:
     link_add.add_argument("--verified-by", required=True)
     link_add.add_argument("--notes")
     link_commands.add_parser("list")
+    requirements = commands.add_parser("requirements", help="registrar requisitos explícitos da fonte")
+    requirements_commands = requirements.add_subparsers(dest="requirements_command", required=True)
+    requirements_set = requirements_commands.add_parser("set", help="atualizar requisitos com evidência textual")
+    requirements_set.add_argument("--job-id", required=True, type=int)
+    requirements_set.add_argument("--actor", required=True)
+    for name, label in (("education", "education"), ("experience", "experience")):
+        requirements_set.add_argument(f"--{name}-status", choices=["unknown", "required", "not_required"], default="unknown")
+        requirements_set.add_argument(f"--{name}-evidence")
+    requirements_commands.add_parser("show").add_argument("--job-id", required=True, type=int)
     return parser
 
 
@@ -82,6 +92,10 @@ def main() -> None:
         asyncio.run(_add_link(args))
     elif args.command == "link" and args.link_command == "list":
         asyncio.run(_list_links())
+    elif args.command == "requirements" and args.requirements_command == "set":
+        asyncio.run(_set_requirements(args))
+    elif args.command == "requirements" and args.requirements_command == "show":
+        asyncio.run(_show_requirements(args))
 
 
 async def _add_referral(args: argparse.Namespace) -> None:
@@ -238,6 +252,52 @@ async def _list_links() -> None:
                     f"{link.id}\tprogram={program.id}\t{program.company}\tjob={link.job_id}\t"
                     f"active={link.is_active}\texpires={link.expires_at}\turl={link.url}"
                 )
+    finally:
+        await close_engine(engine)
+
+
+async def _set_requirements(args: argparse.Namespace) -> None:
+    requirements = JobRequirements(
+        education=RequirementFact(status=args.education_status, evidence=args.education_evidence),
+        experience=RequirementFact(status=args.experience_status, evidence=args.experience_evidence),
+    )
+    settings = get_settings()
+    engine = create_engine(settings)
+    await init_db(engine)
+    try:
+        sessions = create_session_factory(engine)
+        async with sessions.begin() as session:
+            job = await session.get(Job, args.job_id, with_for_update=True)
+            if job is None:
+                raise SystemExit("job not found")
+            before = {"requirements": job.requirements or {}}
+            job.requirements = requirements.model_dump()
+            session.add(AuditEvent(
+                job_id=job.id,
+                event_type="requirements_updated",
+                before_json=before,
+                after_json={"requirements": job.requirements},
+                actor=args.actor,
+            ))
+    finally:
+        await close_engine(engine)
+    print(f"Requisitos da vaga {args.job_id} atualizados; uma nova publicação exige nova prévia.")
+
+
+async def _show_requirements(args: argparse.Namespace) -> None:
+    settings = get_settings()
+    engine = create_engine(settings)
+    await init_db(engine)
+    try:
+        sessions = create_session_factory(engine)
+        async with sessions() as session:
+            job = await session.get(Job, args.job_id)
+            if job is None:
+                raise SystemExit("job not found")
+            requirements = JobRequirements.model_validate(job.requirements or {})
+            for name in ("education", "experience"):
+                fact = getattr(requirements, name)
+                print(f"{name}\t{fact.status}\t{fact.evidence or ''}")
     finally:
         await close_engine(engine)
 

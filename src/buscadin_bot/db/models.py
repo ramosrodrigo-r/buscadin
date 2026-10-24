@@ -3,7 +3,7 @@
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint
+from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -38,12 +38,13 @@ class Job(Base):
     remote_type: Mapped[str | None] = mapped_column(String(100))
     eligible_countries: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
     eligibility_status: Mapped[str] = mapped_column(String(32), default="unknown", nullable=False)
-    salary_min: Mapped[float | None] = mapped_column()
-    salary_max: Mapped[float | None] = mapped_column()
+    salary_min: Mapped[float | None] = mapped_column(Float)
+    salary_max: Mapped[float | None] = mapped_column(Float)
     currency: Mapped[str | None] = mapped_column(String(16))
     salary_period: Mapped[str | None] = mapped_column(String(32))
     salary_disclosed: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     language_requirements: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
+    requirements: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
     evidence: Mapped[str | None] = mapped_column(Text)
     posted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
@@ -54,7 +55,10 @@ class Job(Base):
     referral_status: Mapped[str] = mapped_column(String(32), default="SEM_PROGRAMA", nullable=False)
     referral_status_reason: Mapped[str | None] = mapped_column(Text)
     resolved_referral_link_id: Mapped[int | None] = mapped_column(
-        ForeignKey("referral_links.id", ondelete="SET NULL")
+        ForeignKey(
+            "referral_links.id", ondelete="SET NULL",
+            name="fk_jobs_resolved_referral_link_id", use_alter=True,
+        )
     )
     referral_campaign_key: Mapped[str | None] = mapped_column(String(255))
     editorial_status: Mapped[str] = mapped_column(String(32), default="NOVA", nullable=False)
@@ -179,6 +183,68 @@ class BotState(Base):
     key: Mapped[str] = mapped_column(String(100), primary_key=True)
     value: Mapped[str] = mapped_column(Text, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+
+class SitePublication(Base):
+    """Only this approved snapshot may be rendered by the public catalogue."""
+
+    __tablename__ = "site_publications"
+    __table_args__ = (Index("ix_site_publications_status_date", "status", "published_at"),)
+
+    job_id: Mapped[int] = mapped_column(ForeignKey("jobs.id"), primary_key=True)
+    status: Mapped[str] = mapped_column(String(32), default="NAO_PUBLICADA", nullable=False)
+    version: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    public_snapshot: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
+    search_text: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    destination_snapshot: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
+    approved_by: Mapped[str | None] = mapped_column(String(255))
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    unpublished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    application_suspended: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
+
+class SitePreview(Base):
+    """Short-lived confirmation bound to an actor and exact content/destination."""
+
+    __tablename__ = "site_previews"
+
+    token: Mapped[str] = mapped_column(String(32), primary_key=True)
+    job_id: Mapped[int] = mapped_column(ForeignKey("jobs.id"), nullable=False)
+    actor: Mapped[str] = mapped_column(String(255), nullable=False)
+    expected_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    snapshot: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class SitePublicationEvent(Base):
+    """Append-only decisions; keep old approved content and URL for audit."""
+
+    __tablename__ = "site_publication_events"
+    __table_args__ = (Index("ix_site_events_job_version", "job_id", "version"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    event_key: Mapped[str] = mapped_column(String(128), unique=True, nullable=False)
+    job_id: Mapped[int] = mapped_column(ForeignKey("jobs.id"), nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    action: Mapped[str] = mapped_column(String(32), nullable=False)
+    actor: Mapped[str] = mapped_column(String(255), nullable=False)
+    reason: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    snapshot: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+
+class SiteAlert(Base):
+    """Durable outbox for publication issues, separate from new-job notifications."""
+
+    __tablename__ = "site_alerts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    event_key: Mapped[str] = mapped_column(String(128), unique=True, nullable=False)
+    job_id: Mapped[int] = mapped_column(ForeignKey("jobs.id"), nullable=False)
+    message: Mapped[str] = mapped_column(Text, nullable=False)
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
 
 
 def model_defaults() -> dict[str, Any]:

@@ -6,6 +6,7 @@ from datetime import datetime
 from html.parser import HTMLParser
 
 from buscadin_bot.sources.base import RawJob
+from buscadin_bot.services.requirements import JobRequirements
 
 
 class _TextExtractor(HTMLParser):
@@ -43,6 +44,7 @@ class NormalizedJob:
     salary_period: str | None = None
     salary_disclosed: bool = False
     language_requirements: list[str] = field(default_factory=list)
+    requirements: dict = field(default_factory=dict)
     evidence: str | None = None
     posted_at: datetime | None = None
 
@@ -67,6 +69,8 @@ def normalize_raw_job(raw: RawJob, *, category: str, eligibility: tuple[str, lis
         currency=raw.currency.upper() if raw.currency else None,
         salary_period=raw.salary_period,
         salary_disclosed=raw.min_salary is not None or raw.max_salary is not None,
+        language_requirements=list(raw.language_requirements),
+        requirements=JobRequirements.model_validate(raw.requirements).model_dump(),
         evidence=evidence,
         posted_at=raw.posted_at,
     )

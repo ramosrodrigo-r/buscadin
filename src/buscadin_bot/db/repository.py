@@ -36,6 +36,7 @@ class JobRepository:
         job.salary_period = data.salary_period
         job.salary_disclosed = data.salary_disclosed
         job.language_requirements = data.language_requirements
+        job.requirements = data.requirements
         job.evidence = data.evidence
         job.posted_at = data.posted_at
         job.last_seen_at = utcnow()

@@ -39,6 +39,30 @@ uv run buscadin
 
 O processo faz coleta da Himalayas, enfileira vagas novas, envia a outbox ao chat privado e consulta updates por long polling. A API pública da Himalayas não exige chave; `HIMALAYAS_API_KEY` é opcional para limites maiores. A atribuição da fonte deve ser preservada.
 
+## Portal público
+
+O portal usa o mesmo domínio de publicação, mas deve ser executado como um serviço separado no Dokploy. Ele lê somente snapshots aprovados e expõe a API privada usada pelo bot:
+
+```bash
+uv run alembic upgrade head
+uv run buscadin-portal
+```
+
+Configure `SITE_API_TOKEN`, `TELEGRAM_ADMIN_USER_ID`, `SITE_BASE_URL` e `SITE_OFFICIAL_DOMAINS` no serviço do portal. O bot usa o mesmo `SITE_API_TOKEN` em `SITE_API_URL`; o token não deve aparecer em logs ou URLs. O proxy deve encaminhar o domínio público para a porta `PORTAL_PORT` e manter a API `/internal/*` inacessível publicamente por firewall ou rota interna.
+
+O roteiro de serviços, variáveis, migration e rollback está em `docs/DEPLOYMENT-MVP.md`.
+
+Para registrar requisitos explícitos encontrados na fonte, sempre informe a evidência. Informação desconhecida deve permanecer `unknown`:
+
+```bash
+uv run buscadin requirements set --job-id 42 --actor admin \
+  --education-status not_required \
+  --education-evidence "A fonte informa que não exige graduação."
+uv run buscadin requirements show --job-id 42
+```
+
+Alterar requisitos registra um evento de auditoria e exige uma nova prévia para qualquer publicação web atualizada.
+
 ## Referrals oficiais
 
 Links são cadastrados somente quando obtidos em programa oficial e autorizados para compartilhamento:
@@ -79,6 +103,28 @@ No Telegram, use `/indicacoes`, `/pendentes`, `/programas`, `/vaga <id>` e `/vin
 ## Fila editorial
 
 O estado comercial da indicação é independente do estado editorial: `NOVA`, `SELECIONADA`, `PRONTA`, `PUBLICADA` ou `DESCARTADA`. Use `/selecionadas`, os botões de seleção/preparação ou `/publicar <id> <canal> [url]`. A preparação gera texto copiável, com transparência de possível comissão quando houver link validado; a publicação é apenas registrada manualmente.
+
+## Integração com o catálogo (em desenvolvimento)
+
+O cliente, os handlers e o servidor HTTP do portal estão implementados. A
+integração só deve ser habilitada depois que o serviço do portal estiver
+implantado e o token compartilhado configurado; não aponte o bot para um
+endpoint inexistente.
+`SITE_API_URL` e `SITE_API_TOKEN` habilitam o cliente privado. Ambos os IDs de
+administrador do Telegram são obrigatórios nesse modo. HTTP sem TLS é aceito
+somente em loopback. O cliente não segue redirects da API interna.
+
+- `/publicar_site <id> <oficial|indicacao>` solicita resumo editorial e apresenta
+  conteúdo/destino antes do botão de confirmação. A prévia não publica.
+- `/atualizar_site <id> <oficial|indicacao>` usa o mesmo fluxo com nova versão.
+- `/site <id>` consulta o resultado persistido, inclusive após falha de rede.
+- `/despublicar_site <id>` pede confirmação para retirada.
+- `/pendentes_site [página]` e `/publicadas_site [página]` consultam a plataforma.
+- `/requisitos_site <id>` solicita graduação e experiência com evidência textual; estados explícitos exigem prova e não reescrevem uma publicação já aprovada.
+- `/cancelar` encerra a coleta do resumo. Prévias já emitidas expiram em 15 minutos.
+
+`/publicar` continua registrando a publicação editorial manual em canais externos.
+O cliente não escreve tabelas da plataforma: usa o contrato da API privada.
 
 ## Migrations e backup
 

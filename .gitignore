@@ -10,3 +10,4 @@ data/*.db
 data/*.db-*
 dist/
 *.egg-info/
+.preview/

@@ -1,4 +1,5 @@
 from sqlalchemy import select
+import pytest
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from buscadin_bot.config import Settings
@@ -79,3 +80,36 @@ async def test_poller_authorizes_callback_updates_and_persists_offset() -> None:
     assert state is not None and state.value == "42"
     assert telegram.answers == [("callback-1", "Vaga atualizada")]
     assert telegram.edits == [(55, 5)]
+
+
+async def test_poller_commits_each_success_and_skips_replayed_updates(monkeypatch) -> None:
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    await init_db(engine)
+    sessions = create_session_factory(engine)
+    calls = []
+    fail = True
+
+    async def handle(update, **kwargs):
+        calls.append(update["update_id"])
+        if update["update_id"] == 2 and fail:
+            raise RuntimeError("Transient failure")
+
+    class ReplayTelegram:
+        offsets = []
+
+        async def get_updates(self, *, offset):
+            self.offsets.append(offset)
+            return [{"update_id": 1}, {"update_id": 2}]
+
+    monkeypatch.setattr("buscadin_bot.telegram.poller.handle_update", handle)
+    telegram = ReplayTelegram()
+    poller = TelegramPoller(telegram, sessions, Settings(_env_file=None))
+    with pytest.raises(RuntimeError):
+        await poller.poll_once()
+    async with sessions() as session:
+        assert (await session.get(BotState, "telegram_update_offset")).value == "2"
+    fail = False
+    assert await poller.poll_once() == 1
+    assert calls == [1, 2, 2]
+    assert telegram.offsets == [None, 2]
+    await engine.dispose()

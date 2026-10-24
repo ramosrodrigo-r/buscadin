@@ -54,3 +54,35 @@ def test_salary_is_not_invented_by_raw_payload() -> None:
 
     assert job.min_salary is None
     assert job.max_salary is None
+
+
+def test_company_presence_in_brazil_does_not_confirm_eligibility() -> None:
+    job = make_job(description="Our company has offices in Brazil and Germany.")
+    assert classify_eligibility(job)[0] == "unknown"
+
+
+def test_brazil_mention_does_not_override_us_restriction() -> None:
+    job = make_job(location_restrictions=["United States"], description="Help our customers in Brazil.")
+    assert classify_eligibility(job)[0] == "excluded_br"
+
+
+def test_explicit_exclusion_overrides_conflicting_structured_brazil() -> None:
+    job = make_job(location_restrictions=["Brazil"], description="Not available in Brazil.")
+    assert classify_eligibility(job)[0] == "excluded_br"
+
+
+def test_worldwide_except_brazil_is_excluded() -> None:
+    job = make_job(location_restrictions=["Worldwide"], description="Remote worldwide except Brazil.")
+    assert classify_eligibility(job)[0] == "excluded_br"
+
+
+def test_portuguese_exclusion_is_respected() -> None:
+    job = make_job(description="Vaga indisponível no Brasil.")
+    assert classify_eligibility(job)[0] == "excluded_br"
+
+
+def test_confirmed_brazil_preserves_other_source_countries() -> None:
+    job = make_job(location_restrictions=["Brazil", "Portugal"])
+    status, countries, _ = classify_eligibility(job)
+    assert status == "confirmed_br"
+    assert countries == ["BR", "PORTUGAL"]

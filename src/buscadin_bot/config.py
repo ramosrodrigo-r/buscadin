@@ -29,6 +29,19 @@ class Settings(BaseSettings):
     http_max_retries: int = 3
     himalayas_api_url: str = "https://himalayas.app/jobs/api"
     himalayas_api_key: SecretStr | None = None
+    site_api_url: str | None = None
+    site_api_token: SecretStr | None = None
+    site_base_url: str = "https://buscadin.app"
+    site_contact_email: str = "contato@buscadin.app"
+    site_official_domains: str = ""
+    portal_host: str = "127.0.0.1"
+    portal_port: int = 8080
+
+    def require_site_identity(self) -> None:
+        if not self.site_api_url or self.site_api_token is None:
+            raise ValueError("SITE_API_URL e SITE_API_TOKEN devem ser configurados juntos")
+        if self.telegram_admin_chat_id is None or self.telegram_admin_user_id is None:
+            raise ValueError("Integração do site exige TELEGRAM_ADMIN_CHAT_ID e TELEGRAM_ADMIN_USER_ID")
 
     def require_telegram(self) -> tuple[str, int, int | None]:
         """Return Telegram credentials or fail with a useful configuration error."""

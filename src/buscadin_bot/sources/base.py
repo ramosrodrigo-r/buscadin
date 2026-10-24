@@ -24,6 +24,8 @@ class RawJob:
     currency: str | None = None
     salary_period: str | None = None
     posted_at: datetime | None = None
+    language_requirements: list[str] = field(default_factory=list)
+    requirements: dict[str, Any] = field(default_factory=dict)
     raw: dict[str, Any] = field(default_factory=dict)
 
 

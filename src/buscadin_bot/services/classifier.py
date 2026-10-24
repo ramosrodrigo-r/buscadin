@@ -13,6 +13,9 @@ EXCLUSION_PATTERNS = (
     r"\bbrazil (?:is )?excluded\b",
     r"\b(?:us|u\.s\.|united states) only\b",
     r"\bmust be located in (?:the )?(?:us|u\.s\.|united states)\b",
+    r"\b(?:except|excluding) (?:brazil|brasil)\b",
+    r"\bn[aã]o (?:aceitamos|contratamos) (?:candidatos |residentes )?(?:do|no) brasil\b",
+    r"\b(?:indispon[ií]vel|n[aã]o dispon[ií]vel) (?:no|para o) brasil\b",
 )
 
 CATEGORY_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
@@ -36,8 +39,10 @@ def classify_category(raw: RawJob) -> str:
 def classify_eligibility(raw: RawJob) -> tuple[str, list[str], str]:
     """Return status, normalized countries and the evidence used.
 
-    LATAM/global language remains ``unknown``; only explicit Brazil acceptance is
-    ``confirmed_br``. A bounded non-Brazil country list is exclusionary.
+    LATAM/global language remains ``unknown``. Structured Brazil acceptance is
+    ``confirmed_br`` unless source text explicitly excludes it. Description-only
+    mentions require editorial review: a company office is not eligibility.
+    A bounded non-Brazil country list is exclusionary.
     """
 
     restrictions = [item.strip() for item in raw.location_restrictions if item.strip()]
@@ -46,12 +51,12 @@ def classify_eligibility(raw: RawJob) -> tuple[str, list[str], str]:
     description = raw.description.lower()
     combined = f"{restriction_text} {description}"
 
-    if any(country == "BR" for country in normalized) or _mentions_brazil_positively(description):
-        evidence = _evidence("Brazil explicitly accepted", restrictions, description)
-        return "confirmed_br", ["BR"], evidence
-
     if any(re.search(pattern, combined) for pattern in EXCLUSION_PATTERNS):
         return "excluded_br", normalized, _evidence("Brazil excluded by source text", restrictions, description)
+
+    if "BR" in normalized:
+        evidence = _evidence("Brazil explicitly accepted by location restrictions", restrictions, description)
+        return "confirmed_br", normalized, evidence
 
     if restrictions and not any(country.lower() in UNKNOWN_REGIONS for country in normalized):
         return "excluded_br", normalized, _evidence("Source lists countries without Brazil", restrictions, description)
@@ -64,12 +69,6 @@ def normalize_country(value: str) -> str:
     if compact in BRAZIL_ALIASES:
         return "BR"
     return compact.upper()
-
-
-def _mentions_brazil_positively(description: str) -> bool:
-    if not re.search(r"\b(?:brazil|brasil)\b", description):
-        return False
-    return not any(re.search(pattern, description) for pattern in EXCLUSION_PATTERNS)
 
 
 def _evidence(reason: str, restrictions: Iterable[str], description: str) -> str:

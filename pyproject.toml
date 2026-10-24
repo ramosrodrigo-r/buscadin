@@ -10,6 +10,7 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "aiosqlite>=0.20,<1",
+    "asyncpg>=0.29,<1",
     "alembic>=1.14,<2",
     "httpx>=0.27,<1",
     "pydantic>=2.8,<3",
@@ -19,6 +20,7 @@ dependencies = [
 
 [project.scripts]
 buscadin = "buscadin_bot.cli:main"
+buscadin-portal = "buscadin_bot.web.portal:main"
 
 [dependency-groups]
 dev = [
