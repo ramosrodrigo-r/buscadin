@@ -76,6 +76,22 @@ Antes do lançamento, restaure uma cópia em um banco isolado, valide a migratio
 
 O dump deve ser criptografado no destino externo e ter a restauração verificada. O banco do Listmonk deve possuir backup e restauração independentes; não misture os arquivos nem os ciclos de retenção.
 
+### Persistência do Listmonk confirmada por SSH em 2026-10-24
+
+Consulta limitada a nomes, imagens, status e mounts (sem variáveis de ambiente):
+
+- `listmonk_db`: PostgreSQL 17, volume `listmonk-app-al9hes_listmonk-data`,
+  montado em `/var/lib/postgresql/data`.
+- `listmonk_app`: uploads em
+  `/etc/dokploy/compose/listmonk-app-al9hes/code/uploads`, montados em
+  `/listmonk/uploads`.
+
+Preservar e restaurar tanto o dump lógico do banco quanto os uploads.
+Não copiar diretamente os arquivos do volume de um PostgreSQL em execução
+como substituto de `pg_dump`. Os mounts não comprovam a configuração de
+conexão da aplicação nem que já existe backup externo. O destino externo
+ainda precisa ser definido pelo operador.
+
 ## Carga fora de produção
 
 Depois de subir um ambiente de staging, execute a verificação limitada e registre o resultado:
