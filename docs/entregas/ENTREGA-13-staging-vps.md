@@ -28,6 +28,11 @@ healthcheck chamado de dentro do próprio container retornou:
 {"status":"ok"}
 ```
 
+Também foram consultadas internamente as rotas `/vagas`, `/robots.txt` e
+`/sitemap.xml`, todas com resposta 200. A API privada `/internal/jobs`, sem
+token, respondeu 401. Isso confirma que a superfície pública e a proteção da
+API estão ativas antes de qualquer exposição por proxy.
+
 ## Limites e próxima etapa
 
 O ambiente ainda não é um serviço administrado pela interface do Dokploy nem
