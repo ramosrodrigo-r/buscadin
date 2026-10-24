@@ -48,6 +48,15 @@ sintéticos nesse banco; nunca apontar essa variável para produção.
 O container `buscadin-pg-validation` usa autenticação trust exclusivamente
 para dados sintéticos locais. Não reutilizar essa configuração em produção.
 
+## Imagem de produção
+
+`docker build -t buscadin-portal-validation:local .` concluiu com a imagem
+Python 3.12, dependências travadas pelo `uv.lock` e `asyncpg` instalado.
+O entrypoint `python -m buscadin_bot.web.portal` foi executado em um
+container temporário usando o PostgreSQL local; `GET /healthz` respondeu
+`200 {"status":"ok"}` na porta publicada. Isso valida o build e a execução
+do portal na mesma forma que será usada pelo Dokploy.
+
 ## Ensaio de backup e restauração
 
 O banco sintético de importação foi exportado com `pg_dump -Fc` e restaurado
