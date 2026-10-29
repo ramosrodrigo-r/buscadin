@@ -1,6 +1,8 @@
-# Buscadin Jobs Bot
+# Buscadin
 
-Bot privado do Telegram para coletar vagas remotas de fontes autorizadas, classificar a elegibilidade para o Brasil e enviar oportunidades ao administrador para revisão. O escopo e as restrições estão em `PRD_Buscadin_Telegram_Bot.md`.
+Plataforma brasileira de curadoria de vagas remotas, reunindo o bot privado do Telegram, o portal público, o painel administrativo e os crawlers de fontes autorizadas. O sistema classifica a elegibilidade para o Brasil e envia oportunidades ao administrador para revisão antes da publicação. O escopo e as restrições estão em `PRD_Buscadin_Telegram_Bot.md`.
+
+Este repositório contém a aplicação completa do Buscadin em um único serviço Python: coleta, triagem, catálogo, publicação, portal web, painel admin e integração com Telegram.
 
 Consulte `docs/entregas/` para o processo e o resultado de cada entrega e `.planning/` para roadmap, requisitos e estado do projeto.
 
