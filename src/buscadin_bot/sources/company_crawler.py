@@ -29,7 +29,7 @@ RESOURCE_HOSTS = {
     "micro1": {"cdn.prod.website-files.com", "d3e54v103j8qbb.cloudfront.net",
                "static-website.sahil-773.workers.dev", "prod-api.micro1.ai"},
     "turing": set(),
-    "mercor": {"aws.api.mercor.com", "d2wgjfzcvyb8t1.cloudfront.net"},
+    "mercor": {"aws.api.mercor.com", "coil.mercor.com", "d2wgjfzcvyb8t1.cloudfront.net"},
     "alignerr": set(),
 }
 
