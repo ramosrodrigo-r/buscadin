@@ -38,6 +38,44 @@ class CrawlError(ValueError):
     pass
 
 
+def mercor_listing_response(response):
+    """Observe only the public listing response triggered by the explore page."""
+    url = urlsplit(response.url)
+    return (url.scheme == "https" and url.hostname == "aws.api.mercor.com"
+            and url.port in (None, 443) and url.path == "/work/listings-explore-page"
+            and response.request.method == "GET")
+
+
+def mercor_public_links(payload):
+    if not isinstance(payload, dict) or not isinstance(payload.get("listings"), list):
+        raise CrawlError("Formato da listagem pública da Mercor mudou")
+    urls = []
+    for item in payload["listings"]:
+        if not isinstance(item, dict):
+            raise CrawlError("Anúncio inválido na listagem pública da Mercor")
+        # Never use private/closed records or URLs supplied by the response.
+        if item.get("isPrivate") is not False or item.get("status") != "active":
+            continue
+        identity = item.get("listingId")
+        if not isinstance(identity, str) or not re.fullmatch(r"list_[A-Za-z0-9_-]+", identity):
+            raise CrawlError("Identidade inválida na listagem pública da Mercor")
+        urls.append(f"https://work.mercor.com/jobs/{identity}")
+    return list(dict.fromkeys(urls))
+
+
+def mercor_embedded_links(html):
+    """Public response may already contain the query cache (no XHR follows)."""
+    for payload in scripts(html):
+        if not isinstance(payload, dict):
+            continue
+        queries = payload.get("props", {}).get("pageProps", {}).get("dehydratedState", {}).get("queries", [])
+        for query in queries:
+            key = query.get("queryKey", [])
+            if isinstance(key, list) and key and key[0] == "listings-explore-page":
+                return mercor_public_links(query.get("state", {}).get("data"))
+    return None
+
+
 def job_identity(source: str, url: str) -> tuple[str, str] | None:
     """Keep stable company IDs, remove marketing parameters, reject other hosts."""
     parsed = urlsplit(url)
@@ -160,6 +198,19 @@ class CompanyCrawler:
         self.seen = set()
         self.robots = {}
         self.http = None
+        self.mercor_urls = None
+
+    async def capture_mercor_response(self, response):
+        if response.status != 200:
+            raise CrawlError(f"Listagem pública da Mercor retornou HTTP {response.status}")
+        body = await response.body()
+        if len(body) > 5 * 1024 * 1024:
+            raise CrawlError("Listagem pública da Mercor excedeu o limite de tamanho")
+        try:
+            payload = json.loads(body)
+        except (ValueError, UnicodeError) as error:
+            raise CrawlError("Resposta inválida da listagem pública da Mercor") from error
+        self.mercor_urls = mercor_public_links(payload)
 
     async def allowed(self, url):
         parsed = urlsplit(url)
@@ -186,6 +237,7 @@ class CompanyCrawler:
         response = await page.goto(url, wait_until="domcontentloaded", timeout=30000)
         if response and response.status >= 400:
             raise CrawlError(f"Fonte retornou HTTP {response.status}")
+        return response
 
     async def guard(self, route):
         request = route.request
@@ -230,10 +282,27 @@ class CompanyCrawler:
                     listing, detail = await context.new_page(), await context.new_page()
                     listing.set_default_timeout(12000)
                     detail.set_default_timeout(12000)
-                    await self.navigate(listing, SOURCES[self.name][1])
+                    if self.name == "mercor":
+                        pending = asyncio.create_task(listing.wait_for_event(
+                            "response", predicate=mercor_listing_response, timeout=90000))
+                        try:
+                            await asyncio.sleep(0)  # Register before navigation.
+                            response = await self.navigate(listing, SOURCES[self.name][1])
+                            body = await response.body() if response else b""
+                            if len(body) > 5 * 1024 * 1024:
+                                raise CrawlError("Página pública da Mercor excedeu o limite de tamanho")
+                            self.mercor_urls = mercor_embedded_links(body)
+                            if self.mercor_urls is None:
+                                await self.capture_mercor_response(await pending)
+                        finally:
+                            pending.cancel()
+                            await asyncio.gather(pending, return_exceptions=True)
+                    else:
+                        await self.navigate(listing, SOURCES[self.name][1])
                     selector = {"micro1": 'a[href*="jobs.micro1.ai/post/"]', "alignerr": 'a[href*="/jobs/"]',
                                 "mercor": '[data-test="listing-title"]', "turing": 'h3.line-clamp-2'}[self.name]
-                    await listing.locator(selector).first.wait_for(state="attached", timeout=25000)
+                    if self.name != "mercor":
+                        await listing.locator(selector).first.wait_for(state="attached", timeout=25000)
                     for page_number in range(self.max_pages):
                         self.report.pages = page_number + 1
                         if self.name == "turing":
@@ -264,7 +333,7 @@ class CompanyCrawler:
                             break
                 finally:
                     await browser.close()
-        if not self.report.discovered:
+        if not self.report.discovered and self.mercor_urls is None:
             raise CrawlError("Nenhum anúncio reconhecido; verifique se a página mudou")
         return jobs
 
@@ -287,12 +356,7 @@ class CompanyCrawler:
 
     async def links(self, page):
         if self.name == "mercor":
-            # Public SEO list gives canonical description URLs, not /apply routes.
-            objects = [obj for data in scripts(await page.content()) for obj in json_objects(data)]
-            urls = [obj["url"] for obj in objects if obj.get("@type") == "ListItem" and isinstance(obj.get("url"), str) and job_identity("mercor", obj["url"])]
-            if urls:
-                return list(dict.fromkeys(urls))
-            raise CrawlError("Listagem pública da Mercor ainda não carregou os links")
+            return self.mercor_urls or []
         return await page.locator('a[href]').evaluate_all("xs => xs.map(x => x.href)")
 
     async def turing_page(self, page, jobs):
@@ -318,6 +382,28 @@ class CompanyCrawler:
                 await asyncio.sleep(1)
 
     async def next_page(self, page):
+        if self.name == "mercor":
+            if not self.mercor_urls:
+                return False
+            button = page.locator('[aria-label="Go to next page"]')
+            if not await button.count():
+                # The data loaded, but a missing UI cannot prove end of list.
+                self.report.limited = True
+                return False
+            if not await button.first.is_enabled() or await button.first.get_attribute("aria-disabled") == "true":
+                return False
+            previous = self.mercor_urls
+            try:
+                async with page.expect_response(mercor_listing_response, timeout=30000) as pending:
+                    await button.first.click()
+                await self.capture_mercor_response(await pending.value)
+                if self.mercor_urls == previous:
+                    raise CrawlError("A próxima página da Mercor repetiu a listagem")
+            except (BrowserTimeout, CrawlError) as error:
+                self.report.limited = True
+                self.failure(error)
+                return False
+            return bool(self.mercor_urls)
         selector = {"micro1": 'a[href*="jobs.micro1.ai/post/"]', "alignerr": 'a[href*="/jobs/"]',
                     "mercor": '[data-test="listing-title"]', "turing": 'h3.line-clamp-2'}[self.name]
         before = await page.locator(selector).evaluate_all("xs => xs.map(x => x.id + x.textContent).join('|')")

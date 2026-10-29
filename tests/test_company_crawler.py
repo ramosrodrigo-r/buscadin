@@ -11,12 +11,77 @@ from buscadin_bot.db.models import Job
 from buscadin_bot.db.session import create_session_factory, init_db
 from buscadin_bot.services.classifier import classify_eligibility
 from buscadin_bot.services.crawl_runs import CrawlRuns
-from buscadin_bot.sources.company_crawler import CompanyCrawler, CrawlError, CrawlReport, job_identity, parse_detail
+from buscadin_bot.sources.company_crawler import (CompanyCrawler, CrawlError, CrawlReport,
+    job_identity, parse_detail, mercor_public_links, mercor_listing_response, mercor_embedded_links)
 from buscadin_bot.sources.base import RawJob
 
 MICRO = 'https://jobs.micro1.ai/post/5ed081d3-01aa-4840-9ac6-c75a61993136'
 ALIGN = 'https://www.alignerr.com/jobs/62eb97fa-c5aa-4af4-8d71-2ebb8f7e1077'
 DESCRIPTION = 'Review and label video clips following the project guidelines. The source does not state education requirements.'
+
+
+def test_mercor_public_batch_filters_private_closed_and_deduplicates():
+    public = {'listingId': 'list_abc', 'isPrivate': False, 'status': 'active',
+              'url': 'http://127.0.0.1/private'}
+    links = mercor_public_links({'listings': [public, public,
+        {**public, 'listingId': 'list_private', 'isPrivate': True},
+        {**public, 'listingId': 'list_closed', 'status': 'closed'},
+        {'listingId': 'list_unknown', 'status': 'active'}]})
+    assert links == ['https://work.mercor.com/jobs/list_abc']
+    crawler = CompanyCrawler('mercor', known_ids={'list_abc'})
+    assert not crawler.accept(links[0])
+    assert crawler.report.skipped == 1
+    assert not crawler.accept(links[0])
+    assert crawler.report.skipped == 1
+
+
+def test_mercor_reads_public_initial_query_cache_without_cards():
+    payload = {'props': {'pageProps': {'dehydratedState': {'queries': [
+        {'queryKey': ['listings-explore-page', 'listingsPublicQuery'],
+         'state': {'data': {'listings': [{'listingId': 'list_abc', 'isPrivate': False, 'status': 'active'}]}}}
+    ]}}}}
+    html = '<script id="__NEXT_DATA__">' + json.dumps(payload) + '</script>'
+    assert mercor_embedded_links(html) == ['https://work.mercor.com/jobs/list_abc']
+    assert mercor_embedded_links('<html>Loading</html>') is None
+
+
+@pytest.mark.parametrize('payload', [{}, {'listings': {}}, {'listings': [None]},
+    {'listings': [{'listingId': '../internal', 'isPrivate': False, 'status': 'active'}]}])
+def test_mercor_public_batch_rejects_changed_schema_and_invalid_ids(payload):
+    with pytest.raises(CrawlError):
+        mercor_public_links(payload)
+
+
+@pytest.mark.parametrize('url,method,matched', [
+    ('https://aws.api.mercor.com/work/listings-explore-page?offset=0', 'GET', True),
+    ('https://aws.api.mercor.com/work/private', 'GET', False),
+    ('https://evil.example/work/listings-explore-page', 'GET', False),
+    ('https://aws.api.mercor.com/work/listings-explore-page', 'POST', False),
+])
+def test_mercor_observes_only_public_listing_response(url, method, matched):
+    assert mercor_listing_response(SimpleNamespace(url=url, request=SimpleNamespace(method=method))) == matched
+
+
+async def test_mercor_capture_and_missing_pagination_report_partial():
+    crawler = CompanyCrawler('mercor')
+    async def body():
+        return json.dumps({'listings': [{'listingId': 'list_abc', 'isPrivate': False, 'status': 'active'}]}).encode()
+    await crawler.capture_mercor_response(SimpleNamespace(status=200, body=body))
+    # Reading links never inspects cards, page HTML, or JSON-LD of the listing.
+    assert await crawler.links(None) == ['https://work.mercor.com/jobs/list_abc']
+    async def count(): return 0
+    page = SimpleNamespace(locator=lambda _: SimpleNamespace(count=count))
+    assert not await crawler.next_page(page)
+    assert crawler.report.limited
+
+
+async def test_mercor_empty_batch_is_valid_but_http_errors_are_not():
+    crawler = CompanyCrawler('mercor')
+    async def body(): return b'{"listings":[]}'
+    await crawler.capture_mercor_response(SimpleNamespace(status=200, body=body))
+    assert crawler.mercor_urls == []
+    with pytest.raises(CrawlError, match='HTTP 403'):
+        await crawler.capture_mercor_response(SimpleNamespace(status=403))
 
 
 @pytest.mark.parametrize('url,blocked', [

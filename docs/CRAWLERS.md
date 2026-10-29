@@ -24,13 +24,31 @@ privado; a topologia de acesso via SSH está documentada em `ADMIN.md`.
 | --- | --- | --- |
 | micro1 | https://www.micro1.ai/experts/opportunities | Scroll incremental, links `jobs.micro1.ai/post/<uuid>`, descrição JSON-LD renderizada |
 | Turing | https://work.turing.com/jobs | Botão Load more roles, painéis de descrição `?jobId=<id>` |
-| Mercor | https://work.mercor.com/explore | Paginação, links públicos SEO `/jobs/<listingId>/<slug>`, JSON-LD da descrição |
+| Mercor | https://work.mercor.com/explore | Resposta pública de vagas recebida pelo navegador, validação individual em `/jobs/<listingId>` e JSON-LD da descrição |
 | Alignerr | https://www.alignerr.com/en/jobs | Load more roles, dados públicos incorporados em `__NEXT_DATA__` das páginas `/jobs/<uuid>` |
 
 As consultas usam navegador sem sessão, com hosts de navegação fixos, verificação
 de robots.txt, intervalo entre páginas e sem acesso direto a APIs privadas.
 Login, CAPTCHA, bloqueios e alterações de layout não são contornados.
 O fato de robots.txt permitir uma página não substitui os termos da fonte.
+
+### Mercor: coleta independente dos cards
+
+O navegador abre a listagem sem sessão e lê o cache público de vagas incorporado
+em `__NEXT_DATA__` na resposta HTML inicial. Quando esse cache está ausente,
+observa somente a resposta GET de
+`https://aws.api.mercor.com/work/listings-explore-page` que a própria página
+solicita. O crawler não chama diretamente esse endpoint nem acessa APIs
+autenticadas. Apenas registros explicitamente públicos e ativos são candidatos;
+IDs são validados e os links de detalhe são construídos no host oficial fixo.
+A descrição continua sendo extraída da página oficial de cada vaga.
+
+Se o botão de próxima página estiver disponível, o crawler observa a resposta
+recebida após o clique. Se os dados chegarem mas a paginação não renderizar,
+processa apenas o lote recebido e informa `limited=true`: a rodada não comprova
+que todas as vagas foram percorridas. Não inventa offsets nem endpoints.
+Erros HTTP, mudança de formato e repetição de página são reportados, mantendo
+as restrições de hosts/IPs, os limites e a deduplicação existentes.
 
 ## Sem repetição
 
