@@ -1,0 +1,12 @@
+[Unit]
+Description=Restrict public VPS input while preserving WireGuard forwarding
+After=network-online.target netfilter-persistent.service docker.service wg-quick@wg-dragonwilds.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/buscadin-edge-firewall
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
