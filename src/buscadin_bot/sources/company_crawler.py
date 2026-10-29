@@ -23,6 +23,16 @@ SOURCES = {
     "alignerr": ("Alignerr", "https://www.alignerr.com/en/jobs", {"www.alignerr.com"}),
 }
 
+# Exact asset/API hosts needed to render the public listings. Advertising and
+# analytics hosts remain blocked; these hosts cannot become top-level pages.
+RESOURCE_HOSTS = {
+    "micro1": {"cdn.prod.website-files.com", "d3e54v103j8qbb.cloudfront.net",
+               "static-website.sahil-773.workers.dev", "prod-api.micro1.ai"},
+    "turing": set(),
+    "mercor": {"aws.api.mercor.com", "d2wgjfzcvyb8t1.cloudfront.net"},
+    "alignerr": set(),
+}
+
 
 class CrawlError(ValueError):
     pass
@@ -185,7 +195,7 @@ class CompanyCrawler:
             private = not ipaddress.ip_address(host).is_global
         except ValueError:
             private = host == "localhost" or host.endswith((".localhost", ".local", ".internal"))
-        if (private or parsed.scheme != "https" or host not in SOURCES[self.name][2]
+        if (private or parsed.scheme != "https" or host not in (SOURCES[self.name][2] | RESOURCE_HOSTS[self.name])
                 or parsed.username is not None or parsed.password is not None
                 or parsed.port not in (None, 443)
                 or request.resource_type in {"image", "media", "font"}):
@@ -202,7 +212,7 @@ class CompanyCrawler:
                 # Pin every permitted hostname for this browser lifetime: checking
                 # DNS and then letting Chromium resolve again permits rebinding.
                 rules = []
-                for host in sorted(SOURCES[self.name][2]):
+                for host in sorted(SOURCES[self.name][2] | RESOURCE_HOSTS[self.name]):
                     addresses = await asyncio.get_running_loop().getaddrinfo(
                         host, 443, family=socket.AF_INET, type=socket.SOCK_STREAM)
                     ips = {item[4][0] for item in addresses}
