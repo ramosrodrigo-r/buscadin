@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 import ipaddress
 import json
 import re
+import socket
 from urllib.parse import parse_qs, urljoin, urlsplit
 from urllib.robotparser import RobotFileParser
 
@@ -184,7 +185,10 @@ class CompanyCrawler:
             private = not ipaddress.ip_address(host).is_global
         except ValueError:
             private = host == "localhost" or host.endswith((".localhost", ".local", ".internal"))
-        if private or request.resource_type in {"image", "media", "font"}:
+        if (private or parsed.scheme != "https" or host not in SOURCES[self.name][2]
+                or parsed.username is not None or parsed.password is not None
+                or parsed.port not in (None, 443)
+                or request.resource_type in {"image", "media", "font"}):
             return await route.abort()
         if request.is_navigation_request() and request.frame.parent_frame is None:
             if not await self.allowed(request.url):
@@ -195,7 +199,21 @@ class CompanyCrawler:
         jobs = []
         async with httpx.AsyncClient(timeout=20, headers={"User-Agent": "BuscadinBot/1.0"}) as self.http:
             async with async_playwright() as playwright:
-                browser = await playwright.chromium.launch()
+                # Pin every permitted hostname for this browser lifetime: checking
+                # DNS and then letting Chromium resolve again permits rebinding.
+                rules = []
+                for host in sorted(SOURCES[self.name][2]):
+                    addresses = await asyncio.get_running_loop().getaddrinfo(
+                        host, 443, family=socket.AF_INET, type=socket.SOCK_STREAM)
+                    ips = {item[4][0] for item in addresses}
+                    if not ips or any(not ipaddress.ip_address(ip).is_global for ip in ips):
+                        raise CrawlError("DNS da fonte aponta para endereço não público")
+                    rules.append(f"MAP {host} {sorted(ips)[0]}")
+                rules.append("MAP * ~NOTFOUND")
+                browser = await playwright.chromium.launch(args=[
+                    "--host-resolver-rules=" + ",".join(rules), "--no-proxy-server",
+                    "--disable-quic",
+                ])
                 try:
                     context = await browser.new_context(service_workers="block")
                     await context.route("**/*", self.guard)

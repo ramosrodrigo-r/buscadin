@@ -60,7 +60,7 @@ async def test_poller_authorizes_callback_updates_and_persists_offset() -> None:
                     "id": "callback-1",
                     "from": {"id": 77},
                     "data": "approve:1",
-                    "message": {"message_id": 5, "chat": {"id": 55}},
+                    "message": {"message_id": 5, "chat": {"id": 55, "type": "private"}},
                 },
             }
         ]

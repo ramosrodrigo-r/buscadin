@@ -25,7 +25,7 @@ class FakeTelegram:
 def update(text: str) -> dict:
     return {
         "message": {
-            "chat": {"id": 1},
+            "chat": {"id": 1, "type": "private"},
             "from": {"id": 77},
             "text": text,
         }

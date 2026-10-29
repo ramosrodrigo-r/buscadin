@@ -77,9 +77,9 @@ async def environment(tmp_path):
     telegram = Telegram()
 
     async def dispatch(text=None, callback=None, actor=77, chat=55):
-        update = {"message": {"text": text, "from": {"id": actor}, "chat": {"id": chat}}} if text is not None else {
+        update = {"message": {"text": text, "from": {"id": actor}, "chat": {"id": chat, "type": "private"}}} if text is not None else {
             "callback_query": {"id": "callback-1", "from": {"id": actor}, "data": callback,
-                               "message": {"message_id": 5, "chat": {"id": chat}}},
+                               "message": {"message_id": 5, "chat": {"id": chat, "type": "private"}}},
         }
         async with bot_sessions.begin() as session:
             await handle_update(update, session=session, telegram=telegram, settings=settings, site_gateway=gateway)

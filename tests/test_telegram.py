@@ -5,6 +5,20 @@ import httpx
 from buscadin_bot.db.models import Job
 from buscadin_bot.telegram.api import TelegramClient
 from buscadin_bot.telegram.formatters import format_job_message, job_keyboard
+from buscadin_bot.telegram.handlers import is_authorized_update
+from buscadin_bot.config import Settings
+
+
+def test_authorization_requires_both_ids_and_private_chat():
+    settings = Settings(_env_file=None, telegram_admin_chat_id=123, telegram_admin_user_id=456)
+    update = {"message": {"chat": {"id": 123, "type": "private"}, "from": {"id": 456}}}
+    assert is_authorized_update(update, settings)
+    for kind in ('group', 'supergroup', 'channel', None):
+        update['message']['chat']['type'] = kind
+        assert not is_authorized_update(update, settings)
+    update['message']['chat']['type'] = 'private'
+    settings.telegram_admin_user_id = None
+    assert not is_authorized_update(update, settings)
 
 
 def sample_job() -> Job:

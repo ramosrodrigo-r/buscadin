@@ -1,5 +1,6 @@
 import asyncio
 import json
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -16,6 +17,25 @@ from buscadin_bot.sources.base import RawJob
 MICRO = 'https://jobs.micro1.ai/post/5ed081d3-01aa-4840-9ac6-c75a61993136'
 ALIGN = 'https://www.alignerr.com/jobs/62eb97fa-c5aa-4af4-8d71-2ebb8f7e1077'
 DESCRIPTION = 'Review and label video clips following the project guidelines. The source does not state education requirements.'
+
+
+@pytest.mark.parametrize('url,blocked', [
+    ('http://dokploy-postgres:5432/', True),
+    ('http://127.0.0.1:3000/', True),
+    ('https://rebind.example.org/', True),
+    ('https://jobs.micro1.ai.evil.example/', True),
+    ('https://jobs.micro1.ai:8443/', True),
+    ('https://user:pass@jobs.micro1.ai/', True),
+    ('https://jobs.micro1.ai/api/jobs', False),
+])
+async def test_subresources_cannot_bypass_source_allowlist(url, blocked):
+    actions = []
+    async def abort(): actions.append('blocked')
+    async def proceed(): actions.append('allowed')
+    route = SimpleNamespace(request=SimpleNamespace(url=url, resource_type='fetch',
+        is_navigation_request=lambda: False), abort=abort, continue_=proceed)
+    await CompanyCrawler('micro1').guard(route)
+    assert actions == ['blocked' if blocked else 'allowed']
 
 
 def ld(data):

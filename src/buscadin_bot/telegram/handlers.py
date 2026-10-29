@@ -35,10 +35,10 @@ def is_authorized_update(update: dict[str, Any], settings: Settings) -> bool:
     if not isinstance(message, dict):
         return False
     chat = message.get("chat", {})
-    if chat.get("id") != settings.telegram_admin_chat_id:
+    if chat.get("type") != "private" or chat.get("id") != settings.telegram_admin_chat_id:
         return False
     if settings.telegram_admin_user_id is None:
-        return True
+        return False
     actor = update.get("message", {}).get("from") or update.get("callback_query", {}).get("from", {})
     return actor.get("id") == settings.telegram_admin_user_id
 

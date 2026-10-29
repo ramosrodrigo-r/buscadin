@@ -51,6 +51,8 @@ class Settings(BaseSettings):
             missing.append("TELEGRAM_BOT_TOKEN")
         if self.telegram_admin_chat_id is None:
             missing.append("TELEGRAM_ADMIN_CHAT_ID")
+        if self.telegram_admin_user_id is None:
+            missing.append("TELEGRAM_ADMIN_USER_ID")
         if missing:
             raise ValueError(f"Telegram configuration is incomplete: {', '.join(missing)}")
         return (
