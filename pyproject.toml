@@ -16,11 +16,14 @@ dependencies = [
     "pydantic>=2.8,<3",
     "pydantic-settings>=2.4,<3",
     "sqlalchemy[asyncio]>=2.0.30,<3",
+    "playwright>=1.55,<2",
+    "beautifulsoup4>=4.13,<5",
 ]
 
 [project.scripts]
 buscadin = "buscadin_bot.cli:main"
 buscadin-portal = "buscadin_bot.web.portal:main"
+buscadin-admin = "buscadin_bot.web.admin:main"
 
 [dependency-groups]
 dev = [

@@ -12,13 +12,20 @@ from buscadin_bot.services.normalizer import NormalizedJob
 class JobRepository:
     async def upsert_job(self, session: AsyncSession, data: NormalizedJob) -> tuple[Job, bool]:
         result = await session.execute(
-            select(Job).where(Job.source == data.source, Job.source_job_id == data.source_job_id)
+            select(Job).where(Job.source == data.source, Job.source_job_id == data.source_job_id).with_for_update()
         )
         job = result.scalar_one_or_none()
         is_new = job is None
         if job is None:
             job = Job(source=data.source, source_job_id=data.source_job_id)
             session.add(job)
+
+        # An explicitly edited draft belongs to the curator. Recollection records
+        # its presence without silently replacing approved evidence or URLs.
+        if not is_new and job.review_status == "admin_curated":
+            job.last_seen_at = utcnow()
+            job.last_checked_at = utcnow()
+            return job, False
 
         job.source_url = data.source_url
         job.application_url = data.application_url

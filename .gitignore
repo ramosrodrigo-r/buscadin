@@ -11,3 +11,4 @@ data/*.db-*
 dist/
 *.egg-info/
 .preview/
+data/admin-password

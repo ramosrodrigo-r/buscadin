@@ -312,7 +312,7 @@ async def _serve_connection(
     app: PortalApplication, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
 ) -> None:
     try:
-        header_bytes = await reader.readuntil(b"\r\n\r\n")
+        header_bytes = await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), timeout=15)
         if len(header_bytes) > MAX_REQUEST_BYTES:
             response = app._error(413, "Requisição muito grande")
         else:
@@ -325,14 +325,19 @@ async def _serve_connection(
                 for line in lines[1:-2]:
                     if ":" in line:
                         key, value = line.split(":", 1)
-                        headers[key.strip()] = value.strip()
-                content_length = int(headers.get("Content-Length", "0"))
+                        key = key.strip().lower()
+                        if key in headers:
+                            raise ValueError("Cabeçalho duplicado")
+                        headers[key] = value.strip()
+                if "transfer-encoding" in headers:
+                    raise ValueError("Transfer-Encoding não suportado")
+                content_length = int(headers.get("content-length", "0"))
                 if content_length < 0 or content_length > MAX_BODY_BYTES:
                     response = app._error(413, "Corpo da requisição muito grande")
                 else:
-                    body = await reader.readexactly(content_length)
+                    body = await asyncio.wait_for(reader.readexactly(content_length), timeout=15)
                     response = await app.handle(request[0], request[1], headers=headers, body=body)
-    except (asyncio.IncompleteReadError, asyncio.LimitOverrunError, UnicodeError, ValueError):
+    except (asyncio.IncompleteReadError, asyncio.LimitOverrunError, UnicodeError, ValueError, TimeoutError):
         response = app._error(400, "Requisição inválida")
     except Exception:
         response = app._error(500, "Erro interno")
@@ -353,7 +358,7 @@ async def _serve_connection(
     status_text = {
         200: "OK", 301: "Moved Permanently", 303: "See Other", 400: "Bad Request",
         401: "Unauthorized", 403: "Forbidden", 404: "Not Found", 405: "Method Not Allowed",
-        410: "Gone", 413: "Payload Too Large", 422: "Unprocessable Entity",
+        409: "Conflict", 410: "Gone", 413: "Payload Too Large", 415: "Unsupported Media Type", 422: "Unprocessable Entity", 429: "Too Many Requests",
         500: "Internal Server Error",
     }.get(response.status, "Error")
     writer.write(

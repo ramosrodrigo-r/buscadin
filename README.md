@@ -41,6 +41,10 @@ O processo faz coleta da Himalayas, enfileira vagas novas, envia a outbox ao cha
 
 ## Portal público
 
+O painel privado é iniciado com `uv run buscadin-admin`, separado do processo
+público, em `http://127.0.0.1:8081`. Consulte [operação do painel](docs/ADMIN.md)
+para senha, banco compartilhado, acesso via SSH e controles disponíveis.
+
 O portal usa o mesmo domínio de publicação, mas deve ser executado como um serviço separado no Dokploy. Ele lê somente snapshots aprovados e expõe a API privada usada pelo bot:
 
 ```bash

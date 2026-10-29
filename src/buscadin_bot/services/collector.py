@@ -5,6 +5,8 @@ from dataclasses import dataclass
 from collections.abc import Sequence
 
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
+from buscadin_bot.db.models import Job
 
 from buscadin_bot.db.repository import JobRepository
 from buscadin_bot.services.classifier import classify_category, classify_eligibility
@@ -21,6 +23,7 @@ class CollectionResult:
     fetched: int = 0
     inserted: int = 0
     updated: int = 0
+    skipped: int = 0
     notifications_queued: int = 0
     failed: int = 0
     error: str | None = None
@@ -35,12 +38,15 @@ class Collector:
         self.repository = repository or JobRepository()
         self.referral_resolver = referral_resolver or ReferralResolver()
 
-    async def collect_source(self, session: AsyncSession, source: JobSource) -> CollectionResult:
+    async def collect_source(self, session: AsyncSession, source: JobSource, *, new_only: bool = False) -> CollectionResult:
         result = CollectionResult(source=source.name)
         try:
             raw_jobs: Sequence = await source.fetch_jobs()
             result.fetched = len(raw_jobs)
             for raw in raw_jobs:
+                if new_only and await session.scalar(select(Job.id).where(Job.source == raw.source, Job.source_job_id == raw.source_job_id)):
+                    result.skipped += 1
+                    continue
                 classification = classify_eligibility(raw)
                 data = normalize_raw_job(
                     raw,
@@ -58,6 +64,7 @@ class Collector:
             await session.commit()
         except Exception as error:
             await session.rollback()
+            result.inserted = result.updated = result.notifications_queued = 0
             result.failed = 1
             result.error = str(error)
             logger.exception("job source collection failed", extra={"source": source.name})
