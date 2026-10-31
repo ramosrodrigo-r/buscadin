@@ -56,29 +56,31 @@ processos escrevendo, use PostgreSQL; SQLite é a configuração local.
 
 ## Acesso remoto
 
-Esta implementação vincula o servidor a `127.0.0.1` e valida o Host e a origem.
-Não aponte uma rota pública Traefik/Cloudflare diretamente para o painel.
-Quando implantado como processo no host da VPS, acesse pelo túnel:
+Em produção, o hostname planejado é `https://gerentin.buscadin.app`. O nome
+menos óbvio não é uma barreira de segurança. Antes de publicar o DNS/roteamento,
+ative Cloudflare Access e crie uma aplicação Self-hosted que permita somente o
+e-mail do operador. A senha do próprio painel permanece como segunda barreira.
+O acesso deve passar pelo proxy Cloudflare; não publique a porta do serviço no
+host nem crie um registro DNS sem proxy.
 
-```sh
-ssh -N -L 8081:127.0.0.1:8081 buscadin-vps
-```
+O serviço administrativo usa a mesma imagem, banco PostgreSQL e rede overlay do
+portal, mas roda em um processo/serviço separado. O backend não ganha uma porta
+pública. `ADMIN_ORIGIN` deve coincidir exatamente com o endereço HTTPS aberto no
+navegador; `ADMIN_BIND_HOST=0.0.0.0` só é adequado dentro da rede privada do
+container e `ADMIN_PORT` define a porta interna. O cookie de sessão recebe
+`Secure` automaticamente para origens HTTPS.
 
-Depois abra exatamente `http://127.0.0.1:8081`. Esse comando pressupõe que o
-serviço já foi implantado no host. O painel **ainda não foi implantado na VPS**.
-Em Docker, loopback é o do container: não basta publicar a porta; é necessário
-definir a topologia privada antes de implantar.
+O entrypoint de produção `scripts/entrypoint-admin.sh` lê `database_url` e
+`admin_password` de secrets Docker montados em `/run/secrets/`. Não use valores
+literais em argumentos de deploy, labels, URLs ou logs. Não configure uma rota
+Traefik nem DNS para esse hostname antes de a aplicação Access e sua política
+Allow por e-mail estarem ativas.
 
-`ADMIN_ORIGIN` permite outra porta loopback (por exemplo,
-`http://127.0.0.1:9081`); ela determina também a porta de escuta. Utilize a mesma
-origem no navegador. O padrão não aceita `localhost` como alias de `127.0.0.1`.
-
-Sessões ficam na memória, duram oito horas e são invalidadas no reinício/logout.
-Cookies têm HttpOnly e SameSite=Strict; Secure não é usado porque o navegador se
-conecta ao HTTP loopback através do túnel SSH. Cada escrita exige origem exata,
-JSON, sessão e token CSRF. Cinco falhas de login bloqueiam tentativas por cinco
-minutos. A senha é comparada usando scrypt. Esta versão não implementa passkeys
-ou segundo fator próprio; depende da restrição de rede e da proteção do SSH.
+Para operação local, mantenha `ADMIN_ORIGIN=http://127.0.0.1:8081` e o bind
+loopback padrão. Sessões ficam na memória, duram oito horas e são invalidadas no
+reinício/logout. Cada escrita exige origem exata, JSON, sessão e token CSRF.
+Cinco falhas de login bloqueiam tentativas por cinco minutos. A senha é
+comparada usando scrypt.
 
 ## Limites explícitos
 

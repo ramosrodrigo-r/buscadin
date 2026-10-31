@@ -115,10 +115,21 @@ class AdminApplication:
         if len(password) < 20:
             raise ValueError("Senha administrativa deve ter pelo menos 20 caracteres")
         parsed = urlsplit(origin)
-        if parsed.hostname not in {"127.0.0.1", "localhost"} or parsed.scheme != "http" or parsed.path:
-            raise ValueError("O painel exige origem HTTP loopback acessada por túnel SSH")
+        loopback_http = parsed.scheme == "http" and parsed.hostname in {"127.0.0.1", "localhost"}
+        protected_https = parsed.scheme == "https" and bool(parsed.hostname and "." in parsed.hostname)
+        if (
+            not (loopback_http or protected_https)
+            or parsed.path
+            or parsed.query
+            or parsed.fragment
+            or parsed.username
+            or parsed.password
+            or (parsed.scheme == "https" and parsed.port not in {None, 443})
+        ):
+            raise ValueError("Use origem HTTP loopback ou HTTPS com hostname completo")
         self.origin = origin
         self.host = parsed.netloc
+        self.secure_cookies = parsed.scheme == "https"
         self.sessions = sessions
         self.settings = settings
         self.salt = secrets.token_bytes(16)
@@ -190,8 +201,9 @@ class AdminApplication:
                 if len(self.tokens) >= 10:
                     self.tokens.pop(next(iter(self.tokens)))
                 self.tokens[token] = (csrf, now + 28800)
+                secure = "; Secure" if self.secure_cookies else ""
                 return WebResponse(200, json.dumps({"csrf": csrf}).encode(), "application/json", {
-                    "Set-Cookie": f"buscadin_admin={token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=28800"
+                    "Set-Cookie": f"buscadin_admin={token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=28800{secure}"
                 })
             cookie = SimpleCookie()
             cookie.load(headers.get("cookie", ""))
@@ -205,7 +217,10 @@ class AdminApplication:
                 return WebResponse.json(200, {"csrf": session[0]})
             if path == "/api/logout" and method == "POST":
                 self.tokens.pop(token, None)
-                return WebResponse(200, b"{}", "application/json", {"Set-Cookie": "buscadin_admin=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0"})
+                secure = "; Secure" if self.secure_cookies else ""
+                return WebResponse(200, b"{}", "application/json", {
+                    "Set-Cookie": f"buscadin_admin=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0{secure}"
+                })
             return await self._api(method, path, url.query, body)
         except PublicationConflict as error:
             return self._error(409, str(error))
@@ -366,11 +381,18 @@ async def run():
             raise ValueError("Proteja data/admin-password com chmod 600")
         password = password_file.read_text().strip()
     origin = os.environ.get("ADMIN_ORIGIN", "http://127.0.0.1:8081")
+    bind_host = os.environ.get("ADMIN_BIND_HOST", "127.0.0.1")
+    if bind_host not in {"127.0.0.1", "0.0.0.0"}:
+        raise ValueError("ADMIN_BIND_HOST deve ser 127.0.0.1 ou 0.0.0.0")
+    parsed_origin = urlsplit(origin)
+    port = int(os.environ.get("ADMIN_PORT", str(parsed_origin.port or 8081)))
+    if not 1 <= port <= 65535:
+        raise ValueError("ADMIN_PORT inválida")
     engine = create_engine(settings)
     app = AdminApplication(create_session_factory(engine), settings, password, origin=origin)
     print(f"Painel privado: {origin} — senha em ADMIN_PASSWORD ou data/admin-password", flush=True)
     try:
-        await serve(app, host="127.0.0.1", port=urlsplit(origin).port or 8081)
+        await serve(app, host=bind_host, port=port)
     finally:
         await app.crawls.close()
         await engine.dispose()
