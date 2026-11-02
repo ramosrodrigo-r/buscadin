@@ -23,7 +23,7 @@ O runner usa a biblioteca `AIAgent` do Hermes diretamente, com
 memória, arquivos de contexto, revisão em segundo plano ou fallback. Ele verifica
 que a lista efetiva de ferramentas está vazia antes da inferência e rejeita
 respostas contendo chamadas de ferramentas. Não usa o CLI legado nem um gateway.
-O provedor é `openai-codex`, modelo `gpt-6.1-sol`, com OAuth do perfil dedicado.
+O provedor é `openai-codex`, modelo `gpt-6-luna`, com OAuth do perfil dedicado.
 
 A imagem contém uma cópia do código, Python e dependências do Hermes, sem OAuth.
 A revisão auditada é `f0d94882e89ab8d4098b5bb2f166adfb9ee0a0ab`.

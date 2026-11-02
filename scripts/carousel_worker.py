@@ -20,7 +20,7 @@ WORKER_TOKEN = os.environ.get("BUSCADIN_CAROUSEL_WORKER_TOKEN", "")
 ACCESS_CLIENT_ID = os.environ.get("CF_ACCESS_CLIENT_ID", "")
 ACCESS_CLIENT_SECRET = os.environ.get("CF_ACCESS_CLIENT_SECRET", "")
 HERMES_AGENT = Path(os.environ.get("HERMES_AGENT", str(Path.home() / ".local/share/buscadin-carousel/hermes-sandbox")))
-MODEL = os.environ.get("HERMES_CAROUSEL_MODEL", "gpt-6.1-sol")
+MODEL = os.environ.get("HERMES_CAROUSEL_MODEL", "gpt-6-luna")
 POLL_SECONDS = max(5, int(os.environ.get("POLL_SECONDS", "20")))
 
 

@@ -11,7 +11,7 @@ sys.path.insert(0, ROOT)
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model", default="gpt-6.1-sol")
+    parser.add_argument("--model", default="gpt-6-luna")
     parser.add_argument("--check", action="store_true")
     args = parser.parse_args()
     # Freeze a clean configuration before any runtime/plugin/provider imports.
