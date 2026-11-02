@@ -84,7 +84,11 @@ def turing_job_url(job_id: str, title: str) -> str:
     """
     if not re.fullmatch(r"\d+", job_id) or not title.strip() or len(title) > 500:
         raise CrawlError("Identidade ou título da Turing inválido")
-    return "https://work.turing.com/jobs?" + urlencode({"jobId": job_id, "search": title.strip()})
+    # Some display titles add a parenthesized audience label that the site's
+    # search does not index (e.g. "(Android Smartphone Users)"). Search the
+    # base title, while jobId still selects the exact role among similar ones.
+    search = re.sub(r"\s*\([^()]*\)\s*$", "", title.strip()).strip() or title.strip()
+    return "https://work.turing.com/jobs?" + urlencode({"jobId": job_id, "search": search})
 
 
 def job_identity(source: str, url: str) -> tuple[str, str] | None:

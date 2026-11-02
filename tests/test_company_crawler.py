@@ -238,3 +238,16 @@ def test_turing_search_title_cannot_inject_query_parameters():
     assert job_identity('turing', url)[0] == '117194'
     with pytest.raises(CrawlError):
         turing_job_url('117194&jobId=999', title)
+
+
+def test_turing_display_only_parentheses_do_not_hide_the_job_from_search():
+    from urllib.parse import parse_qs, urlsplit
+    title = 'Personal Account Generalist Raters (Android Smartphone Users)'
+    raw = parse_detail('turing', 'https://work.turing.com/jobs?jobId=115452', '',
+                       title=title, text=DESCRIPTION)
+    assert raw.title == title
+    assert raw.source_job_id == '115452'
+    assert parse_qs(urlsplit(raw.source_url).query) == {
+        'jobId': ['115452'], 'search': ['Personal Account Generalist Raters'],
+    }
+    assert job_identity('turing', raw.source_url)[0] == '115452'
