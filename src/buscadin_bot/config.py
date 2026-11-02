@@ -34,6 +34,7 @@ class Settings(BaseSettings):
     site_base_url: str = "https://buscadin.app"
     site_contact_email: str = "contato@buscadin.app"
     site_official_domains: str = ""
+    carousel_worker_token: SecretStr | None = None
     portal_host: str = "127.0.0.1"
     portal_port: int = 8080
 

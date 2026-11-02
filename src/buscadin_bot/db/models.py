@@ -247,6 +247,27 @@ class SiteAlert(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
 
 
+class CarouselDraft(Base):
+    """Operator-requested carousel copy, frozen to the selected job facts."""
+
+    __tablename__ = "carousel_drafts"
+    __table_args__ = (Index("ix_carousel_drafts_status_created", "status", "created_at"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    status: Mapped[str] = mapped_column(String(24), default="queued", nullable=False)
+    job_ids: Mapped[list[int]] = mapped_column(JSON, nullable=False)
+    job_snapshot: Mapped[list[dict[str, Any]]] = mapped_column(JSON, nullable=False)
+    result: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    error_message: Mapped[str | None] = mapped_column(String(500))
+    requested_by: Mapped[str] = mapped_column(String(255), default="admin:web", nullable=False)
+    attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    posted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    post_url: Mapped[str | None] = mapped_column(String(2048))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+
 def model_defaults() -> dict[str, Any]:
     """Expose persisted statuses for callers and documentation."""
 

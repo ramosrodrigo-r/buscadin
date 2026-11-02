@@ -43,6 +43,8 @@ O portal público usa o mesmo banco. Inicie em outro terminal, com `DATABASE_URL
   com progresso em segundo plano e entrada somente de vagas inéditas.
 - Cadastro de programas oficiais e links de indicação, validação de domínio,
   escopo e validade, desativação e reconciliação das publicações afetadas.
+- Seleção de uma a oito vagas para carrossel, geração de texto por worker Hermes,
+  revisão/edição, PNGs locais e registro manual do post.
 - Histórico das últimas 100 ações gerais e 100 ações de publicação.
 
 Salvar é diferente de republicar. Edições manuais marcam a vaga como
@@ -92,6 +94,8 @@ Os quatro crawlers empresariais são acionados exclusivamente no painel e não
 entram na agenda do bot. Veja `CRAWLERS.md` para instalação, limites e diagnóstico.
 Programas e links podem ser cadastrados/desativados; para corrigir um registro,
 desative-o e cadastre o substituto. Listagem limitada aos 200 mais recentes.
+Veja `CAROUSEL-PIPELINE.md` para filas, credenciais, worker de saída e rotação de
+segredos da integração com o homelab.
 
 ## Verificação
 

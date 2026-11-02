@@ -6,7 +6,7 @@ Run one process; sessions expire after eight hours and on process restart.
 
 import asyncio
 from dataclasses import asdict
-from datetime import datetime
+from datetime import datetime, timedelta
 import hashlib
 from http.cookies import SimpleCookie
 import json
@@ -17,11 +17,11 @@ import time
 from typing import Literal
 from urllib.parse import parse_qs, urlsplit
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
-from sqlalchemy import func, or_, select
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, ValidationError, model_validator
+from sqlalchemy import and_, func, or_, select
 
 from buscadin_bot.config import get_settings
-from buscadin_bot.db.models import AuditEvent, Job, ReferralProgram, ReferralLink, SitePublication, SitePublicationEvent, utcnow
+from buscadin_bot.db.models import AuditEvent, CarouselDraft, Job, ReferralProgram, ReferralLink, SitePublication, SitePublicationEvent, utcnow
 from buscadin_bot.db.session import create_engine, create_session_factory
 from buscadin_bot.services.catalogue import PublicCatalogue
 from buscadin_bot.services.collector import Collector
@@ -99,6 +99,73 @@ class LinkDraft(BaseModel):
     official_confirmed: Literal[True]
 
 
+class CarouselRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    job_ids: list[int] = Field(min_length=1, max_length=8)
+
+    @model_validator(mode="after")
+    def unique_ids(self):
+        if len(set(self.job_ids)) != len(self.job_ids):
+            raise ValueError("Selecione cada vaga apenas uma vez")
+        return self
+
+
+class CarouselSlideDraft(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    type: Literal["cover", "job", "closing"]
+    job_id: int | None = None
+    title: str = Field(min_length=1, max_length=120)
+    body: str = Field(min_length=1, max_length=320)
+
+
+class CarouselResultDraft(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    caption: str = Field(min_length=1, max_length=2200)
+    slides: list[CarouselSlideDraft] = Field(min_length=3, max_length=10)
+
+
+class CarouselCompletion(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    draft_id: int = Field(gt=0)
+    result: CarouselResultDraft
+
+
+class CarouselWorkerFailure(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    draft_id: int = Field(gt=0)
+    code: Literal["generation_failed", "invalid_output", "timeout"]
+
+
+class CarouselPostedRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    draft_id: int = Field(gt=0)
+    post_url: str | None = Field(default=None, max_length=2048)
+
+    @model_validator(mode="after")
+    def validate_post_url(self):
+        if self.post_url:
+            parsed = urlsplit(self.post_url)
+            if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
+                raise ValueError("O link do post precisa ser HTTPS")
+        return self
+
+
+def validate_carousel_result(result: CarouselResultDraft, job_snapshot: list[dict]) -> dict:
+    slides = result.slides
+    expected_ids = [item["id"] for item in job_snapshot]
+    if slides[0].type != "cover" or slides[-1].type != "closing":
+        raise ValueError("O carrossel precisa começar com capa e terminar com encerramento")
+    job_slides = slides[1:-1]
+    if any(slide.type != "job" for slide in job_slides):
+        raise ValueError("O carrossel precisa ter uma lâmina por vaga")
+    if [slide.job_id for slide in job_slides] != expected_ids:
+        raise ValueError("As lâminas geradas não correspondem às vagas selecionadas")
+    canonical_titles = {job["id"]: job["title"] for job in job_snapshot}
+    for slide in job_slides:
+        slide.title = canonical_titles[slide.job_id]
+    return result.model_dump()
+
+
 def serialize(model):
     return {column.name: (value.isoformat() if isinstance(value := getattr(model, column.name), datetime) else value)
             for column in model.__table__.columns}
@@ -132,6 +199,10 @@ class AdminApplication:
         self.secure_cookies = parsed.scheme == "https"
         self.sessions = sessions
         self.settings = settings
+        self.worker_token = (settings.carousel_worker_token.get_secret_value()
+                             if settings.carousel_worker_token else "")
+        if self.worker_token and len(self.worker_token) < 40:
+            raise ValueError("CAROUSEL_WORKER_TOKEN precisa ter pelo menos 40 caracteres")
         self.salt = secrets.token_bytes(16)
         self.password_hash = self._hash(password)
         self.tokens = {}
@@ -168,6 +239,13 @@ class AdminApplication:
             if url.scheme or url.netloc:
                 raise ValueError("URL inválida")
             path = url.path
+            if path.startswith("/api/worker/carousels/"):
+                expected = "Bearer " + self.worker_token if self.worker_token else ""
+                if not expected or not secrets.compare_digest(headers.get("authorization", ""), expected):
+                    return self._error(404, "Rota não encontrada")
+                if method != "POST" or headers.get("content-type", "").split(";")[0] != "application/json":
+                    return self._error(405, "Método não permitido")
+                return await self._worker_api(path, body)
             if method == "GET" and path in {"/", "/login"}:
                 return WebResponse.html(200, (Path(__file__).parent / "admin_static/index.html").read_text())
             if method == "GET" and path.startswith("/assets/"):
@@ -230,6 +308,101 @@ class AdminApplication:
             return self._error(422, str(error)[:500])
 
     async def _api(self, method, path, query, body):
+        if path == "/api/carousel/jobs" and method == "GET":
+            async with self.sessions() as session:
+                used = (await session.scalars(select(CarouselDraft.job_ids).where(
+                    CarouselDraft.status.in_(["queued", "generating", "draft", "posted"])
+                ))).all()
+                used_ids = {job_id for group in used for job_id in group}
+                rows = (await session.scalars(
+                    select(Job).where(
+                        Job.status == "active",
+                        Job.eligibility_status != "excluded_br",
+                        Job.editorial_status != "DESCARTADA",
+                        Job.id.not_in(used_ids) if used_ids else True,
+                    ).order_by(Job.id.desc()).limit(200)
+                )).all()
+                return WebResponse.json(200, {"items": [self._carousel_job_snapshot(job) for job in rows]})
+        if path == "/api/carousels" and method == "GET":
+            async with self.sessions() as session:
+                drafts = (await session.scalars(
+                    select(CarouselDraft).order_by(CarouselDraft.id.desc()).limit(30)
+                )).all()
+                return WebResponse.json(200, {"items": [serialize(draft) for draft in drafts]})
+        if path == "/api/carousels" and method == "POST":
+            request = CarouselRequest.model_validate(self.portal._json(body))
+            async with self.sessions.begin() as session:
+                jobs = (await session.scalars(
+                    select(Job).where(Job.id.in_(request.job_ids)).order_by(Job.id).with_for_update()
+                )).all()
+                by_id = {job.id: job for job in jobs}
+                if set(by_id) != set(request.job_ids):
+                    raise ValueError("Uma ou mais vagas não existem mais")
+                if any(job.status != "active" or job.eligibility_status == "excluded_br"
+                       or job.editorial_status == "DESCARTADA" for job in jobs):
+                    raise ValueError("Remova vagas encerradas, incompatíveis com o Brasil ou descartadas")
+                used = (await session.scalars(select(CarouselDraft.job_ids).where(
+                    CarouselDraft.status.in_(["queued", "generating", "draft", "posted"])
+                ))).all()
+                used_ids = {job_id for group in used for job_id in group}
+                if used_ids.intersection(request.job_ids):
+                    raise ValueError("Uma vaga selecionada já faz parte de outro carrossel não descartado")
+                snapshot = [self._carousel_job_snapshot(by_id[job_id]) for job_id in request.job_ids]
+                draft = CarouselDraft(
+                    job_ids=request.job_ids, job_snapshot=snapshot, requested_by="admin:web",
+                    status="queued", created_at=utcnow(), updated_at=utcnow(),
+                )
+                session.add(draft)
+                await session.flush()
+                session.add(AuditEvent(event_type="admin_carousel_request", actor="admin:web",
+                                       after_json={"carousel_id": draft.id, "job_ids": request.job_ids}))
+                return WebResponse.json(200, serialize(draft))
+        if path == "/api/carousels/posted" and method == "POST":
+            request = CarouselPostedRequest.model_validate(self.portal._json(body))
+            async with self.sessions.begin() as session:
+                draft = await session.get(CarouselDraft, request.draft_id, with_for_update=True)
+                if not draft or draft.status != "draft":
+                    return self._error(409, "Somente um rascunho revisado pode ser marcado como postado")
+                draft.status, draft.posted_at = "posted", utcnow()
+                draft.post_url, draft.updated_at = request.post_url, utcnow()
+                session.add(AuditEvent(event_type="admin_carousel_posted", actor="admin:web",
+                                       after_json={"carousel_id": draft.id, "post_url": request.post_url,
+                                                   "job_ids": draft.job_ids}))
+                return WebResponse.json(200, serialize(draft))
+        if path == "/api/carousels/edit" and method == "POST":
+            data = self.portal._json(body)
+            draft_id = int(data.get("draft_id", 0))
+            async with self.sessions.begin() as session:
+                draft = await session.get(CarouselDraft, draft_id, with_for_update=True)
+                if not draft or draft.status != "draft":
+                    return self._error(409, "O rascunho não está disponível para edição")
+                result = CarouselResultDraft.model_validate(data.get("result"))
+                draft.result = validate_carousel_result(result, draft.job_snapshot)
+                draft.updated_at = utcnow()
+                session.add(AuditEvent(event_type="admin_carousel_edit", actor="admin:web",
+                                       after_json={"carousel_id": draft.id}))
+                return WebResponse.json(200, serialize(draft))
+        if path == "/api/carousels/retry" and method == "POST":
+            draft_id = int(self.portal._json(body).get("draft_id", 0))
+            async with self.sessions.begin() as session:
+                draft = await session.get(CarouselDraft, draft_id, with_for_update=True)
+                if not draft or draft.status != "failed":
+                    return self._error(409, "Somente uma geração com falha pode ser tentada novamente")
+                draft.status, draft.error_message = "queued", None
+                draft.claimed_at, draft.updated_at = None, utcnow()
+                session.add(AuditEvent(event_type="admin_carousel_retry", actor="admin:web",
+                                       after_json={"carousel_id": draft.id}))
+                return WebResponse.json(200, serialize(draft))
+        if path == "/api/carousels/discard" and method == "POST":
+            draft_id = int(self.portal._json(body).get("draft_id", 0))
+            async with self.sessions.begin() as session:
+                draft = await session.get(CarouselDraft, draft_id, with_for_update=True)
+                if not draft or draft.status not in {"queued", "draft", "failed"}:
+                    return self._error(409, "Este pedido não pode ser descartado neste estado")
+                draft.status, draft.updated_at = "discarded", utcnow()
+                session.add(AuditEvent(event_type="admin_carousel_discard", actor="admin:web",
+                                       after_json={"carousel_id": draft.id, "job_ids": draft.job_ids}))
+                return WebResponse.json(200, serialize(draft))
         if path == "/api/crawl" and method == "GET":
             return WebResponse.json(200, await self.crawls.status())
         if path == "/api/crawl" and method == "POST":
@@ -359,6 +532,79 @@ class AdminApplication:
         return self._error(404, "Rota não encontrada")
 
     @staticmethod
+    def _carousel_job_snapshot(job: Job) -> dict:
+        return {
+            "id": job.id,
+            "title": job.title,
+            "company": job.company,
+            "category": job.category,
+            "eligibility_status": job.eligibility_status,
+            "eligibility_evidence": job.evidence or "",
+            "remote_type": job.remote_type or "Não informado",
+            "employment_type": job.employment_type or "Não informado",
+            "salary_min": job.salary_min if job.salary_disclosed else None,
+            "salary_max": job.salary_max if job.salary_disclosed else None,
+            "currency": job.currency if job.salary_disclosed else None,
+            "salary_period": job.salary_period if job.salary_disclosed else None,
+            "languages": job.language_requirements or [],
+            "requirements": job.requirements or {},
+            "source_url": job.source_url,
+        }
+
+    async def _worker_api(self, path: str, body: bytes) -> WebResponse:
+        now = utcnow()
+        if path == "/api/worker/carousels/claim":
+            stale_before = now - timedelta(minutes=15)
+            async with self.sessions.begin() as session:
+                draft = await session.scalar(
+                    select(CarouselDraft).where(or_(
+                        CarouselDraft.status == "queued",
+                        and_(CarouselDraft.status == "generating", CarouselDraft.claimed_at < stale_before),
+                    )).order_by(CarouselDraft.id).limit(1).with_for_update(skip_locked=True)
+                )
+                if draft is None:
+                    return WebResponse.json(200, {"draft": None})
+                if draft.attempts >= 4:
+                    draft.status = "failed"
+                    draft.error_message = "Limite de tentativas atingido. Solicite nova tentativa no painel."
+                    draft.updated_at = now
+                    return WebResponse.json(200, {"draft": None})
+                draft.status, draft.claimed_at = "generating", now
+                draft.attempts += 1
+                draft.updated_at = now
+                return WebResponse.json(200, {"draft_id": draft.id, "jobs": draft.job_snapshot})
+        if path == "/api/worker/carousels/complete":
+            request = CarouselCompletion.model_validate(self.portal._json(body))
+            async with self.sessions.begin() as session:
+                draft = await session.get(CarouselDraft, request.draft_id, with_for_update=True)
+                if not draft or draft.status != "generating":
+                    return self._error(409, "Solicitação não está em geração")
+                draft.result = validate_carousel_result(request.result, draft.job_snapshot)
+                draft.status, draft.error_message = "draft", None
+                draft.claimed_at, draft.updated_at = None, now
+                session.add(AuditEvent(event_type="carousel_generated", actor="homelab:carousel-worker",
+                                       after_json={"carousel_id": draft.id, "attempt": draft.attempts}))
+                return WebResponse.json(200, {"ok": True})
+        if path == "/api/worker/carousels/fail":
+            request = CarouselWorkerFailure.model_validate(self.portal._json(body))
+            async with self.sessions.begin() as session:
+                draft = await session.get(CarouselDraft, request.draft_id, with_for_update=True)
+                if not draft or draft.status != "generating":
+                    return self._error(409, "Solicitação não está em geração")
+                draft.status = "failed" if draft.attempts >= 4 else "queued"
+                draft.error_message = {
+                    "generation_failed": "Não foi possível concluir a geração.",
+                    "invalid_output": "A resposta da IA não passou pela validação.",
+                    "timeout": "A geração excedeu o tempo limite.",
+                }[request.code]
+                draft.claimed_at, draft.updated_at = None, now
+                session.add(AuditEvent(event_type="carousel_generation_failed", actor="homelab:carousel-worker",
+                                       after_json={"carousel_id": draft.id, "code": request.code,
+                                                   "status": draft.status}))
+                return WebResponse.json(200, {"ok": True, "status": draft.status})
+        return self._error(404, "Rota não encontrada")
+
+    @staticmethod
     def _apply(job, draft):
         for key, value in draft.model_dump().items():
             setattr(job, key, value)
@@ -369,6 +615,13 @@ class AdminApplication:
 
 async def run():
     settings = get_settings()
+    worker_token_file = os.environ.get("CAROUSEL_WORKER_TOKEN_FILE")
+    if worker_token_file:
+        token_path = Path(worker_token_file)
+        worker_token = token_path.read_text().strip()
+        if len(worker_token) < 40:
+            raise ValueError("CAROUSEL_WORKER_TOKEN_FILE precisa conter um segredo válido")
+        settings.carousel_worker_token = SecretStr(worker_token)
     password = os.environ.get("ADMIN_PASSWORD")
     if not password:
         password_file = Path("data/admin-password")
