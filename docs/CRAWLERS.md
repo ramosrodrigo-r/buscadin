@@ -64,6 +64,14 @@ na ausência em uma coleta parcial. Vagas novas podem entrar como excluídas do
 Brasil ou elegibilidade desconhecida para revisão; não se promete que todos os
 anúncios dessas empresas aceitem brasileiros. Português não prova localização.
 
+Antes de salvar uma descoberta na fila, a coleta agora descarta vagas que a
+fonte restringe fora do Brasil e funções cujo título ou requisitos exigem um
+idioma além de português e inglês (por exemplo, especialista em japonês). O
+painel conta essas vagas em “fora do foco BR”. Formação e experiência não são
+critérios de exclusão. Vagas remotas sem elegibilidade brasileira explícita
+continuam na fila para revisão manual. As regras rodam localmente, sem enviar
+descrições a uma API de IA.
+
 Foi observado na Alignerr um anúncio com `countryCode=BR` e
 `location=United States`. Essa contradição fica descrita na vaga para revisão e
 não confirma elegibilidade para o Brasil. Requisitos não são presumidos.

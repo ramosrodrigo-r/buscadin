@@ -9,6 +9,7 @@ from sqlalchemy import select
 from buscadin_bot.db.models import Job
 
 from buscadin_bot.db.repository import JobRepository
+from buscadin_bot.services.brazil_relevance import brazil_relevance_exclusion
 from buscadin_bot.services.classifier import classify_category, classify_eligibility
 from buscadin_bot.services.normalizer import normalize_raw_job
 from buscadin_bot.services.referrals import ReferralResolver
@@ -24,6 +25,7 @@ class CollectionResult:
     inserted: int = 0
     updated: int = 0
     skipped: int = 0
+    relevance_skipped: int = 0
     notifications_queued: int = 0
     failed: int = 0
     error: str | None = None
@@ -46,6 +48,9 @@ class Collector:
             for raw in raw_jobs:
                 if new_only and await session.scalar(select(Job.id).where(Job.source == raw.source, Job.source_job_id == raw.source_job_id)):
                     result.skipped += 1
+                    continue
+                if brazil_relevance_exclusion(raw):
+                    result.relevance_skipped += 1
                     continue
                 classification = classify_eligibility(raw)
                 data = normalize_raw_job(
