@@ -7,7 +7,7 @@ import ipaddress
 import json
 import re
 import socket
-from urllib.parse import parse_qs, urljoin, urlsplit
+from urllib.parse import parse_qs, urlencode, urljoin, urlsplit
 from urllib.robotparser import RobotFileParser
 
 from bs4 import BeautifulSoup
@@ -76,6 +76,17 @@ def mercor_embedded_links(html):
     return None
 
 
+def turing_job_url(job_id: str, title: str) -> str:
+    """Turing only opens jobId when the job is in its initially loaded results.
+
+    Seed the site's supported search so even jobs from later pages load first.
+    Keep the numeric ID as the identity; the title is only a navigation hint.
+    """
+    if not re.fullmatch(r"\d+", job_id) or not title.strip() or len(title) > 500:
+        raise CrawlError("Identidade ou título da Turing inválido")
+    return "https://work.turing.com/jobs?" + urlencode({"jobId": job_id, "search": title.strip()})
+
+
 def job_identity(source: str, url: str) -> tuple[str, str] | None:
     """Keep stable company IDs, remove marketing parameters, reject other hosts."""
     parsed = urlsplit(url)
@@ -88,6 +99,9 @@ def job_identity(source: str, url: str) -> tuple[str, str] | None:
     key = {"turing": "jobId", "mercor": "listingId"}.get(source)
     value = parse_qs(parsed.query).get(key, [""])[0] if key else ""
     if source == "turing" and parsed.path == "/jobs" and re.fullmatch(r"\d+", value):
+        search = parse_qs(parsed.query).get("search", [])
+        if len(search) == 1 and search[0].strip() and len(search[0]) <= 500:
+            return value, turing_job_url(value, search[0])
         return value, f"https://work.turing.com/jobs?jobId={value}"
     if source == "mercor" and parsed.path == "/explore" and re.fullmatch(r"list_[A-Za-z0-9_-]+", value):
         return value, f"https://work.mercor.com/explore?listingId={value}"
@@ -168,9 +182,10 @@ def parse_detail(source, url, html, *, title="", text="") -> RawJob:
         date = datetime.fromisoformat(posted.replace("Z", "+00:00")) if posted else None
     except (ValueError, AttributeError):
         date = None
+    source_url = turing_job_url(identity[0], title) if source == "turing" else identity[1]
     # HTML is normalized by the collector, escaped by the admin renderer.
     return RawJob(source=source, source_job_id=identity[0], company=SOURCES[source][0],
-        title=title.strip(), description=description, source_url=identity[1], application_url=identity[1],
+        title=title.strip(), description=description, source_url=source_url, application_url=source_url,
         location_restrictions=countries, min_salary=salary_min, max_salary=salary_max,
         currency=currency, salary_period=period, posted_at=date,
         employment_type=employment if isinstance(employment, str) else None,

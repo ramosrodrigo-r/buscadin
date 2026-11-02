@@ -214,3 +214,27 @@ async def test_restart_marks_unfinished_run_as_interrupted(sessions):
     assert (await CrawlRuns(sessions).status())['status']=='interrupted'
     await runs.close()
     assert (await runs.status())['status']=='interrupted'
+
+
+def test_turing_links_seed_search_for_jobs_beyond_initial_results():
+    from urllib.parse import parse_qs, urlsplit
+    raw = parse_detail('turing', 'https://work.turing.com/jobs?jobId=116917', '',
+                       title='Clinical & Health Specialist', text=DESCRIPTION)
+    query = parse_qs(urlsplit(raw.source_url).query)
+    assert query == {'jobId': ['116917'], 'search': ['Clinical & Health Specialist']}
+    assert raw.application_url == raw.source_url
+    assert raw.source_job_id == '116917'
+    assert job_identity('turing', raw.source_url) == ('116917', raw.source_url)
+    assert job_identity('turing', raw.source_url + '&utm_source=test') == ('116917', raw.source_url)
+
+
+def test_turing_search_title_cannot_inject_query_parameters():
+    from buscadin_bot.sources.company_crawler import turing_job_url
+    from urllib.parse import parse_qs, urlsplit
+    title = 'Review & QA #Português? jobId=999'
+    url = turing_job_url('117194', title)
+    assert parse_qs(urlsplit(url).query) == {'jobId': ['117194'], 'search': [title]}
+    assert not urlsplit(url).fragment
+    assert job_identity('turing', url)[0] == '117194'
+    with pytest.raises(CrawlError):
+        turing_job_url('117194&jobId=999', title)
