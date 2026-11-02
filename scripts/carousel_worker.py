@@ -19,8 +19,8 @@ API_BASE = os.environ.get("BUSCADIN_CAROUSEL_ADMIN_URL", "").rstrip("/")
 WORKER_TOKEN = os.environ.get("BUSCADIN_CAROUSEL_WORKER_TOKEN", "")
 ACCESS_CLIENT_ID = os.environ.get("CF_ACCESS_CLIENT_ID", "")
 ACCESS_CLIENT_SECRET = os.environ.get("CF_ACCESS_CLIENT_SECRET", "")
-HERMES_AGENT = Path(os.environ.get("HERMES_AGENT", str(Path.home() / ".local/bin/hermes-agent")))
-MODEL = os.environ.get("HERMES_CAROUSEL_MODEL", "gpt-5.3-codex")
+HERMES_AGENT = Path(os.environ.get("HERMES_AGENT", str(Path.home() / ".local/share/buscadin-carousel/hermes-sandbox")))
+MODEL = os.environ.get("HERMES_CAROUSEL_MODEL", "gpt-6.1-sol")
 POLL_SECONDS = max(5, int(os.environ.get("POLL_SECONDS", "20")))
 
 
@@ -72,9 +72,7 @@ def run_generation(jobs: list[dict]) -> dict:
     if not HERMES_AGENT.is_file():
         raise RuntimeError("hermes_not_installed")
     command = [
-        str(HERMES_AGENT), "chat", "--provider", "openai-codex", "--model", MODEL,
-        "--max-turns", "1", "--run-budget", "270", "--toolsets", "",
-        "--oneshot", "--quiet", "--source", "tool", "--query-file",
+        str(HERMES_AGENT), "--model", MODEL,
     ]
     # Keep the potentially sensitive job facts out of process arguments and
     # remove the temporary prompt immediately after the one-shot request.
@@ -83,10 +81,13 @@ def run_generation(jobs: list[dict]) -> dict:
         os.fchmod(descriptor, 0o600)
         with os.fdopen(descriptor, "w", encoding="utf-8") as prompt_file:
             prompt_file.write(prompt_for(jobs))
-        result = subprocess.run(
-            [*command, prompt_path], capture_output=True, text=True,
-            timeout=300, check=False,
-        )
+        with open(prompt_path, encoding="utf-8") as prompt_file_input:
+            result = subprocess.run(
+                command, stdin=prompt_file_input, capture_output=True, text=True,
+                timeout=300, check=False,
+                env={key: value for key, value in os.environ.items()
+                     if key in {"HOME", "PATH", "LANG", "XDG_RUNTIME_DIR", "DOCKER_HOST"}},
+            )
     except subprocess.TimeoutExpired:
         raise RuntimeError("generation_timeout") from None
     finally:

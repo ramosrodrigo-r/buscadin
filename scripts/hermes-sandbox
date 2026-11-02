@@ -1,0 +1,13 @@
+#!/bin/sh
+set -eu
+# Only the dedicated OAuth profile is mounted. No host home, SSH, Docker socket,
+# gateway socket or panel/Cloudflare credentials enter the inference container.
+name="buscadin-inference-$(cat /proc/sys/kernel/random/uuid)"
+trap 'docker rm -f "$name" >/dev/null 2>&1 || true' EXIT INT TERM
+timeout --signal=TERM 285 docker run --name "$name" --rm -i --read-only --cap-drop=ALL \
+  --security-opt=no-new-privileges --user=1000:1000 \
+  --pids-limit=64 --memory=1g --cpus=1 --stop-timeout=5 \
+  --tmpfs /tmp:rw,noexec,nosuid,size=128m,mode=1777 \
+  --tmpfs /state/home:rw,noexec,nosuid,size=32m,uid=1000,gid=1000 \
+  --mount "type=bind,src=$HOME/.local/state/buscadin-hermes/profile,dst=/state/profile" \
+  buscadin-hermes:isolated-v1 "$@"

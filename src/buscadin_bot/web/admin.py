@@ -388,10 +388,12 @@ class AdminApplication:
                 draft = await session.get(CarouselDraft, draft_id, with_for_update=True)
                 if not draft or draft.status != "failed":
                     return self._error(409, "Somente uma geração com falha pode ser tentada novamente")
+                previous_attempts = draft.attempts
                 draft.status, draft.error_message = "queued", None
+                draft.attempts = 0
                 draft.claimed_at, draft.updated_at = None, utcnow()
                 session.add(AuditEvent(event_type="admin_carousel_retry", actor="admin:web",
-                                       after_json={"carousel_id": draft.id}))
+                                       after_json={"carousel_id": draft.id, "previous_attempts": previous_attempts}))
                 return WebResponse.json(200, serialize(draft))
         if path == "/api/carousels/discard" and method == "POST":
             draft_id = int(self.portal._json(body).get("draft_id", 0))

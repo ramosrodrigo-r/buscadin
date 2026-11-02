@@ -196,3 +196,26 @@ async def test_crawl_api_is_manual_authenticated_and_insert_only(admin):
     second = json.loads((await request(admin, "/api/crawl", auth=auth)).body)
     assert sum(row["inserted"] for row in second["results"]) == 0
     assert sum(row["skipped"] for row in second["results"]) == 4
+
+
+async def test_carousel_manual_retry_restores_budget_and_audits_previous_attempts(admin):
+    from buscadin_bot.db.models import CarouselDraft
+    auth = await login(admin)
+    async with admin.sessions.begin() as session:
+        draft = CarouselDraft(status='failed', attempts=4, job_ids=[1], job_snapshot=[{'id': 1}])
+        session.add(draft)
+        await session.flush()
+        draft_id = draft.id
+    response = await request(admin, '/api/carousels/retry', {'draft_id': draft_id}, auth)
+    assert response.status == 200
+    assert json.loads(response.body)['attempts'] == 0
+    admin.worker_token = 'a' * 64
+    claim = await request(admin, '/api/worker/carousels/claim', {},
+                          headers={'Authorization': 'Bearer ' + admin.worker_token})
+    assert claim.status == 200
+    assert json.loads(claim.body)['draft_id'] == draft_id
+    async with admin.sessions() as session:
+        draft = await session.get(CarouselDraft, draft_id)
+        assert draft.attempts == 1 and draft.status == 'generating'
+        event = await session.scalar(select(AuditEvent).where(AuditEvent.event_type == 'admin_carousel_retry'))
+        assert event.after_json['previous_attempts'] == 4

@@ -12,8 +12,10 @@ RestartSec=15
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
-ProtectHome=read-only
-ReadWritePaths=%h/.hermes
+ProtectHome=tmpfs
+BindReadOnlyPaths=%h/.local/share/buscadin-carousel
+# All inference runs in a separate non-root container with an immutable runtime.
+# The worker itself has no access to the user's Hermes profile or SSH directory.
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 LockPersonality=true
 MemoryMax=1G

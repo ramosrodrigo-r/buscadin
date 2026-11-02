@@ -1,88 +1,69 @@
 # Pipeline de carrossel editorial
 
-## Fluxo
+O operador seleciona de uma a oito vagas em **Carrosséis**, pede um rascunho,
+revisa o texto, baixa os PNGs e registra a publicação manual. Cada pedido congela
+os fatos das vagas. Vagas em pedidos ativos ou postados não voltam à seleção;
+descartar um pedido libera sua seleção. Depois de quatro falhas automáticas, uma
+nova tentativa manual reinicia o orçamento e registra o contador anterior na auditoria.
 
-1. No painel, selecione de uma a oito vagas ativas e peça a geração do texto.
-2. O painel congela os fatos curados e cria um pedido persistente na fila.
-3. O worker do homelab busca o pedido por HTTPS de saída, chama o Hermes com o provedor `openai-codex` e devolve JSON validado.
-4. O painel mostra capa, uma lâmina factual por vaga e encerramento. O operador revisa/edita o texto, baixa cada PNG 1080 × 1350 e publica manualmente.
-5. Depois de publicar, marque o carrossel como postado (com URL opcional). As vagas ficam fora de novas seleções. Um pedido descartado libera as vagas novamente.
+## Execução isolada
 
-O modelo só recebe título, empresa, categoria, remuneração divulgada, idioma,
-tipo de contrato, modalidade e estado de elegibilidade, sem a descrição original
-da vaga. O comando `hermes chat` força o provedor `openai-codex`, usa um arquivo
-temporário protegido para a solicitação (sem colocá-la na lista de processos),
-desabilita toolsets e limita a uma rodada. A solicitação e a resposta passam por validação de esquema;
-os títulos das lâminas de vaga são substituídos pelo título curado no banco.
-O Hermes usa `openai-codex/gpt-5.3-codex` por chamada; o modelo padrão Claude do
-perfil existente não é alterado. Nenhum endpoint/API do Hermes fica exposto.
+O worker do homelab consulta a fila por HTTPS de saída, usando Service Auth do
+Cloudflare e um token backend independente. A senha humana e os tokens de máquina
+não chegam ao navegador. Nenhuma porta do homelab é publicada para esta integração.
 
-O worker usa duas barreiras no endpoint de máquina: um token do Cloudflare Access
-Service Auth (na borda HTTPS) e `CAROUSEL_WORKER_TOKEN` (no serviço admin). Os
-segredos não chegam ao navegador. O worker só pode reivindicar pedidos de
-carrossel e devolver resultado/falha.
+`scripts/hermes-sandbox` inicia um contêiner novo por geração, com usuário 1000,
+rootfs somente leitura, capabilities removidas, no-new-privileges e limites de
+memória, CPU, processos e tempo. O contêiner não recebe home, chaves SSH, socket
+Docker, socket de gateway ou tokens Cloudflare/backend. O perfil OAuth dedicado
+é o único diretório persistente montado; /tmp e o home interno são temporários.
 
-## Configuração de produção
+O runner usa a biblioteca `AIAgent` do Hermes diretamente, com
+`enabled_toolsets=[]`, configuração congelada em safe mode, sem MCP, plugins,
+memória, arquivos de contexto, revisão em segundo plano ou fallback. Ele verifica
+que a lista efetiva de ferramentas está vazia antes da inferência e rejeita
+respostas contendo chamadas de ferramentas. Não usa o CLI legado nem um gateway.
+O provedor é `openai-codex`, modelo `gpt-6.1-sol`, com OAuth do perfil dedicado.
 
-### Serviço admin no Docker Swarm/Dokploy
+A imagem contém uma cópia do código, Python e dependências do Hermes, sem OAuth.
+A revisão auditada é `f0d94882e89ab8d4098b5bb2f166adfb9ee0a0ab`.
+`build_carousel_sandbox.py` recusa revisões diferentes e produz o manifesto de
+runtime selado do Hermes. Atualizar esse runtime exige nova revisão e rebuild.
 
-- Criar um token aleatório com pelo menos 40 caracteres.
-- Armazená-lo como Docker Secret `carousel_worker_token` e montá-lo no serviço
-  admin em `/run/secrets/carousel_worker_token`, somente leitura.
-- Definir `CAROUSEL_WORKER_TOKEN_FILE=/run/secrets/carousel_worker_token` no
-  serviço admin. Não definir o valor secreto como variável literal nem em uma
-  label, URL ou comando de deploy.
-- Executar `uv run alembic upgrade head` (ou o job equivalente) antes de iniciar
-  a nova imagem; a migração `0006_carousel_drafts` cria a fila persistente.
-- Manter o app admin atrás do Cloudflare Access. A política de e-mail continua
-  permitindo o acesso humano; uma política Service Auth separada limita o token
-  de máquina ao worker do homelab.
+## Instalação no homelab
 
-### Worker no homelab
+Copie os scripts para `~/.local/share/buscadin-carousel/` e execute o builder
+nesse diretório com Python 3. Crie um perfil dedicado em
+`~/.local/state/buscadin-hermes/profile` (0700), provisionando seu OAuth em
+`auth.json` (0600) sem incluí-lo na imagem ou no Git.
 
-O worker roda como serviço do usuário `rodrigo`, com `loginctl` linger, e inicia
-somente conexões HTTPS de saída para `gerentin.buscadin.app`. Não abre portas,
-não recebe conexões iniciadas pela VPS e não altera WireGuard, firewall ou proxy.
-
-Instale `scripts/carousel_worker.py` em
-`~/.local/share/buscadin-carousel/carousel_worker.py` e a unit
-`scripts/buscadin-carousel-worker.service` em
-`~/.config/systemd/user/buscadin-carousel-worker.service`. Crie
-`~/.config/buscadin-carousel/worker.env` com modo `0600`:
+O arquivo `~/.config/buscadin-carousel/worker.env` (0600) contém:
 
 ```ini
 BUSCADIN_CAROUSEL_ADMIN_URL=https://gerentin.buscadin.app
-BUSCADIN_CAROUSEL_WORKER_TOKEN=<mesmo segredo do Docker Secret>
-CF_ACCESS_CLIENT_ID=<client id do token de serviço Cloudflare>
-CF_ACCESS_CLIENT_SECRET=<client secret do token de serviço Cloudflare>
+BUSCADIN_CAROUSEL_WORKER_TOKEN=<segredo backend>
+CF_ACCESS_CLIENT_ID=<client id>
+CF_ACCESS_CLIENT_SECRET=<client secret>
 ```
 
-O segredo do Cloudflare tem validade de um ano; programe a rotação antes do
-vencimento. O perfil Hermes e o arquivo `auth.json` ficam no usuário `rodrigo`.
-O systemd limita o serviço ao diretório de dados do Hermes e bloqueia privilégios
-adicionais. A unit usa o modelo Codex por chamada e não altera o perfil padrão.
+O segredo backend está no Docker Secret `buscadin_carousel_worker_20261102`,
+montado no admin como `/run/secrets/carousel_worker_token`, referenciado por
+`CAROUSEL_WORKER_TOKEN_FILE`. O token Cloudflare vence em novembro de 2027;
+rotacione antes do vencimento. O OAuth do perfil dedicado pode exigir nova
+autenticação quando revogado ou expirado; não há fallback para outro provedor.
 
-```sh
-systemctl --user daemon-reload
-systemctl --user enable --now buscadin-carousel-worker.service
-systemctl --user status buscadin-carousel-worker.service
-journalctl --user -u buscadin-carousel-worker.service -n 50 --no-pager
-```
+Instale a unit de usuário, execute `systemctl --user daemon-reload` e
+`systemctl --user enable --now buscadin-carousel-worker.service`. O linger permite
+iniciar sem sessão SSH ativa. O worker tem o home oculto, exceto seus scripts
+montados somente leitura; somente o daemon Docker abre o perfil de inferência.
 
-Os logs contêm estado e IDs dos pedidos, sem prompts, tokens ou respostas do
-modelo. Se o worker cair depois de reivindicar um pedido, ele volta à fila após
-15 minutos. Há no máximo quatro tentativas antes de o painel marcar falha.
+## Verificação
 
-## Operação
+`hermes-sandbox --check` inicializa o agente sem inferência e exige zero
+ferramentas. Uma geração sintética deve retornar JSON e passar pelo esquema do
+admin antes de usar vagas reais. Os logs do worker registram IDs/estados, sem
+prompts, credenciais ou respostas do modelo.
 
-- `queued`: aguardando o homelab.
-- `generating`: reivindicado; pedidos sem atualização por 15 minutos podem ser
-  retomados pelo worker.
-- `draft`: conteúdo aguardando revisão humana.
-- `posted`: operador registrou a publicação; as vagas não voltam à seleção.
-- `failed`: quatro tentativas esgotadas; o painel permite tentar novamente.
-- `discarded`: pedido descartado; as vagas ficam disponíveis outra vez.
-
-As imagens são renderizadas no navegador com a identidade visual atual do
-Buscadin. Não há publicação automática, uso de API paga separada, bot Telegram
-ou servidor Hermes acessível pela internet.
+A API valida capa, uma lâmina por vaga em ordem e encerramento. Os títulos de
+vagas são substituídos pelos títulos curados. Textos são escapados na interface
+e desenhados como texto no canvas. A publicação continua manual.
