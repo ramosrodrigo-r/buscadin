@@ -1,6 +1,9 @@
 import json
 import asyncio
 import time
+import base64
+import struct
+import zlib
 
 import pytest
 from sqlalchemy import select
@@ -219,3 +222,88 @@ async def test_carousel_manual_retry_restores_budget_and_audits_previous_attempt
         assert draft.attempts == 1 and draft.status == 'generating'
         event = await session.scalar(select(AuditEvent).where(AuditEvent.event_type == 'admin_carousel_retry'))
         assert event.after_json['previous_attempts'] == 4
+
+
+def sample_png() -> str:
+    def chunk(kind: bytes, data: bytes) -> bytes:
+        return struct.pack('>I', len(data)) + kind + data + struct.pack('>I', zlib.crc32(kind + data) & 0xffffffff)
+    row = b'\x00' + b'\xff\xff\xff\xff' * 1080
+    raw = (b'\x89PNG\r\n\x1a\n' +
+           chunk(b'IHDR', struct.pack('>IIBBBBB', 1080, 1350, 8, 6, 0, 0, 0)) +
+           chunk(b'IDAT', zlib.compress(row * 1350)) + chunk(b'IEND', b''))
+    return base64.b64encode(raw).decode()
+
+
+async def test_approved_carousel_queues_images_and_worker_creates_one_postiz_draft(admin):
+    from buscadin_bot.db.models import CarouselDraft
+    auth = await login(admin)
+    async with admin.sessions.begin() as session:
+        draft = CarouselDraft(status='draft', job_ids=[1], job_snapshot=[{'id': 1, 'title': 'Annotator'}],
+                              result={'caption': 'Vagas remotas', 'slides': [
+                                  {'type': 'cover', 'job_id': None, 'title': 'Vagas', 'body': 'Confira'},
+                                  {'type': 'job', 'job_id': 1, 'title': 'Annotator', 'body': 'Remoto'},
+                                  {'type': 'closing', 'job_id': None, 'title': 'Veja mais', 'body': 'Na fonte'},
+                              ]})
+        session.add(draft)
+        await session.flush()
+        draft_id = draft.id
+        from buscadin_bot.web.admin import serialize
+        revision = serialize(draft)['approval_revision']
+    image = sample_png()
+    payload = {'draft_id': draft_id, 'expected_revision': revision, 'images': [image] * 3}
+    assert (await request(admin, '/api/carousels/approve', payload)).status == 401
+    assert (await request(admin, '/api/carousels/approve', payload, auth, {'X-CSRF-Token': 'bad'})).status == 403
+    assert (await request(admin, '/api/carousels/approve', payload | {'expected_revision': '0' * 64}, auth)).status == 409
+    assert (await request(admin, '/api/carousels/approve', payload | {'images': ['bad'] * 3}, auth)).status == 422
+    approved = await request(admin, '/api/carousels/approve', payload, auth)
+    assert approved.status == 200, approved.body
+    result = json.loads(approved.body)
+    assert result['status'] == 'approved' and result['postiz_state'] == 'queued'
+    assert 'postiz_assets' not in result and image not in approved.body.decode()
+    assert (await request(admin, '/api/carousels/approve', payload, auth)).status == 409
+    assert (await request(admin, '/api/carousels/discard', {'draft_id': draft_id}, auth)).status == 200
+
+    async with admin.sessions.begin() as session:
+        draft = await session.get(CarouselDraft, draft_id)
+        draft.status, draft.postiz_state, draft.postiz_assets = 'approved', 'queued', [image] * 3
+    admin.worker_token = 'w' * 64
+    worker = {'Authorization': 'Bearer ' + admin.worker_token}
+    assert (await request(admin, '/api/worker/postiz/claim', {}, headers={'Authorization': 'Bearer bad'})).status == 404
+    claim = await request(admin, '/api/worker/postiz/claim', {}, headers=worker)
+    assert json.loads(claim.body)['slide_count'] == 3
+    assert json.loads((await request(admin, '/api/worker/postiz/claim', {}, headers=worker)).body)['draft'] is None
+    picture = await request(admin, '/api/worker/postiz/image', {'draft_id': draft_id, 'index': 1}, headers=worker)
+    assert json.loads(picture.body)['image'] == image
+    assert (await request(admin, '/api/worker/postiz/creating', {'draft_id': draft_id}, headers=worker)).status == 200
+    assert (await request(admin, '/api/worker/postiz/image', {'draft_id': draft_id, 'index': 1}, headers=worker)).status == 409
+    assert (await request(admin, '/api/worker/postiz/complete', {'draft_id': draft_id, 'post_id': 'post-123'}, headers=worker)).status == 200
+    assert json.loads((await request(admin, '/api/worker/postiz/claim', {}, headers=worker)).body)['draft'] is None
+    async with admin.sessions() as session:
+        draft = await session.get(CarouselDraft, draft_id)
+        assert draft.postiz_state == 'drafted' and draft.postiz_post_id == 'post-123'
+        assert draft.postiz_assets is None
+        assert await session.scalar(select(AuditEvent).where(AuditEvent.event_type == 'carousel_postiz_draft_created'))
+
+
+async def test_uncertain_postiz_creation_never_requeues_automatically(admin):
+    from buscadin_bot.db.models import CarouselDraft
+    admin.worker_token = 'w' * 64
+    worker = {'Authorization': 'Bearer ' + admin.worker_token}
+    async with admin.sessions.begin() as session:
+        draft = CarouselDraft(status='approved', postiz_state='creating', postiz_assets=[sample_png()] * 3,
+                              job_ids=[1], job_snapshot=[{'id': 1}], result={'caption': 'a', 'slides': [1, 2, 3]})
+        session.add(draft)
+        await session.flush()
+        draft_id = draft.id
+    assert (await request(admin, '/api/worker/postiz/fail', {'draft_id': draft_id, 'code': 'create_uncertain'}, headers=worker)).status == 200
+    assert json.loads((await request(admin, '/api/worker/postiz/claim', {}, headers=worker)).body)['draft'] is None
+    auth = await login(admin)
+    assert (await request(admin, '/api/carousels/postiz/retry', {'draft_id': draft_id}, auth)).status == 409
+    assert (await request(admin, '/api/carousels/postiz/reconcile', {'draft_id': draft_id, 'confirmed_absent': True}, auth)).status == 200
+    assert (await request(admin, '/api/carousels/postiz/retry', {'draft_id': draft_id}, auth)).status == 200
+    async with admin.sessions.begin() as session:
+        draft = await session.get(CarouselDraft, draft_id)
+        draft.postiz_state = 'uncertain'
+    assert (await request(admin, '/api/carousels/postiz/reconcile', {'draft_id': draft_id, 'post_id': 'post-789'}, auth)).status == 200
+    posted = await request(admin, '/api/carousels/posted', {'draft_id': draft_id, 'post_url': None}, auth)
+    assert posted.status == 200 and json.loads(posted.body)['status'] == 'posted'

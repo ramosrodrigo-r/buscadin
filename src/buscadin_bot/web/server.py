@@ -23,6 +23,7 @@ from buscadin_bot.web.rendering import PortalRenderer
 
 MAX_REQUEST_BYTES = 512 * 1024
 MAX_BODY_BYTES = 256 * 1024
+MAX_CAROUSEL_APPROVAL_BYTES = 8 * 1024 * 1024
 _JOB_PATH = re.compile(r"^/vagas/(?:[a-z0-9-]+-)?([1-9][0-9]*)$")
 _ID_PATH = re.compile(r"^/internal/jobs/([1-9][0-9]*)/publication$")
 
@@ -332,7 +333,9 @@ async def _serve_connection(
                 if "transfer-encoding" in headers:
                     raise ValueError("Transfer-Encoding não suportado")
                 content_length = int(headers.get("content-length", "0"))
-                if content_length < 0 or content_length > MAX_BODY_BYTES:
+                limit = (app.max_body_for(request[0], request[1])
+                         if hasattr(app, "max_body_for") else MAX_BODY_BYTES)
+                if content_length < 0 or content_length > limit:
                     response = app._error(413, "Corpo da requisição muito grande")
                 else:
                     body = await asyncio.wait_for(reader.readexactly(content_length), timeout=15)

@@ -6,6 +6,10 @@ os fatos das vagas. Vagas em pedidos ativos ou postados não voltam à seleção
 descartar um pedido libera sua seleção. Depois de quatro falhas automáticas, uma
 nova tentativa manual reinicia o orçamento e registra o contador anterior na auditoria.
 
+Depois da revisão, o operador também pode aprovar o carrossel para envio como
+rascunho ao Postiz. O fluxo e suas condições de ativação estão em
+`docs/POSTIZ-BRIDGE.md`; aprovar não agenda nem publica o post.
+
 ## Execução isolada
 
 O worker do homelab consulta a fila por HTTPS de saída, usando Service Auth do

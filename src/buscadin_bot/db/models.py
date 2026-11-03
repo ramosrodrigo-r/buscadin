@@ -251,7 +251,10 @@ class CarouselDraft(Base):
     """Operator-requested carousel copy, frozen to the selected job facts."""
 
     __tablename__ = "carousel_drafts"
-    __table_args__ = (Index("ix_carousel_drafts_status_created", "status", "created_at"),)
+    __table_args__ = (
+        Index("ix_carousel_drafts_status_created", "status", "created_at"),
+        Index("ix_carousel_postiz_state", "postiz_state"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     status: Mapped[str] = mapped_column(String(24), default="queued", nullable=False)
@@ -264,6 +267,11 @@ class CarouselDraft(Base):
     claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     posted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     post_url: Mapped[str | None] = mapped_column(String(2048))
+    postiz_assets: Mapped[list[str] | None] = mapped_column(JSON)
+    postiz_state: Mapped[str | None] = mapped_column(String(24))
+    postiz_post_id: Mapped[str | None] = mapped_column(String(255))
+    postiz_error: Mapped[str | None] = mapped_column(String(255))
+    postiz_claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
 

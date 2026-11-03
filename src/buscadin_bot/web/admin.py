@@ -5,6 +5,8 @@ Run one process; sessions expire after eight hours and on process restart.
 """
 
 import asyncio
+import base64
+import binascii
 from dataclasses import asdict
 from datetime import datetime, timedelta
 import hashlib
@@ -13,7 +15,9 @@ import json
 import os
 from pathlib import Path
 import secrets
+import struct
 import time
+import zlib
 from typing import Literal
 from urllib.parse import parse_qs, urlsplit
 
@@ -31,7 +35,7 @@ from buscadin_bot.services.requirements import JobRequirements
 from buscadin_bot.services.referrals import ReferralResolver
 from buscadin_bot.services.site_publications import PublicationConflict, SitePublicationService
 from buscadin_bot.sources.himalayas import HimalayasSource
-from buscadin_bot.web.server import MAX_BODY_BYTES, PortalApplication, WebResponse, serve
+from buscadin_bot.web.server import MAX_BODY_BYTES, MAX_CAROUSEL_APPROVAL_BYTES, PortalApplication, WebResponse, serve
 
 
 class JobDraft(BaseModel):
@@ -150,6 +154,59 @@ class CarouselPostedRequest(BaseModel):
         return self
 
 
+class CarouselApproval(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    draft_id: int = Field(gt=0)
+    expected_revision: str = Field(pattern=r"^[a-f0-9]{64}$")
+    images: list[str] = Field(min_length=3, max_length=10)
+
+
+class CarouselPostizReconcile(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    draft_id: int = Field(gt=0)
+    post_id: str | None = Field(default=None, min_length=1, max_length=255)
+    confirmed_absent: bool = False
+
+    @model_validator(mode="after")
+    def exactly_one_decision(self):
+        if bool(self.post_id) == self.confirmed_absent:
+            raise ValueError("Informe o ID encontrado ou confirme que não há rascunho no Postiz")
+        return self
+
+
+def validate_carousel_png(encoded: str) -> None:
+    if len(encoded) > 2_800_000:
+        raise ValueError("Uma lâmina excede o limite de 2 MiB")
+    try:
+        raw = base64.b64decode(encoded, validate=True)
+    except (ValueError, binascii.Error):
+        raise ValueError("PNG inválido") from None
+    if len(raw) > 2 * 1024 * 1024 or not raw.startswith(b"\x89PNG\r\n\x1a\n"):
+        raise ValueError("PNG inválido ou muito grande")
+    offset, idat, ended = 8, False, False
+    while offset + 12 <= len(raw):
+        length = int.from_bytes(raw[offset:offset + 4], "big")
+        chunk_type = raw[offset + 4:offset + 8]
+        end = offset + 12 + length
+        if length > len(raw) or end > len(raw):
+            break
+        content = raw[offset + 8:offset + 8 + length]
+        expected_crc = int.from_bytes(raw[end - 4:end], "big")
+        if zlib.crc32(chunk_type + content) & 0xffffffff != expected_crc:
+            break
+        if offset == 8:
+            if chunk_type != b"IHDR" or length != 13 or struct.unpack(">II", content[:8]) != (1080, 1350):
+                break
+        if chunk_type == b"IDAT":
+            idat = True
+        offset = end
+        if chunk_type == b"IEND":
+            ended = length == 0 and idat and offset == len(raw)
+            break
+    if not ended:
+        raise ValueError("PNG inválido; exporte novamente a lâmina")
+
+
 def validate_carousel_result(result: CarouselResultDraft, job_snapshot: list[dict]) -> dict:
     slides = result.slides
     expected_ids = [item["id"] for item in job_snapshot]
@@ -167,8 +224,13 @@ def validate_carousel_result(result: CarouselResultDraft, job_snapshot: list[dic
 
 
 def serialize(model):
-    return {column.name: (value.isoformat() if isinstance(value := getattr(model, column.name), datetime) else value)
-            for column in model.__table__.columns}
+    value = {column.name: (item.isoformat() if isinstance(item := getattr(model, column.name), datetime) else item)
+             for column in model.__table__.columns if column.name != "postiz_assets"}
+    if isinstance(model, CarouselDraft) and model.result:
+        value["approval_revision"] = hashlib.sha256(
+            json.dumps(model.result, sort_keys=True, ensure_ascii=False).encode()
+        ).hexdigest()
+    return value
 
 
 def revision(job):
@@ -177,6 +239,11 @@ def revision(job):
 
 class AdminApplication:
     _error = staticmethod(PortalApplication._error)
+
+    @staticmethod
+    def max_body_for(method: str, target: str) -> int:
+        return (MAX_CAROUSEL_APPROVAL_BYTES if method == "POST" and target == "/api/carousels/approve"
+                else MAX_BODY_BYTES)
 
     def __init__(self, sessions, settings, password: str, *, origin="http://127.0.0.1:8081"):
         if len(password) < 20:
@@ -230,7 +297,7 @@ class AdminApplication:
     async def _handle(self, method, target, headers, body):
         if headers.get("host") != self.host:
             return self._error(403, "Origem de acesso não autorizada")
-        if len(body) > MAX_BODY_BYTES:
+        if len(body) > self.max_body_for(method, target):
             return self._error(413, "Requisição muito grande")
         if method not in {"GET", "POST"}:
             return self._error(405, "Método não permitido")
@@ -239,7 +306,7 @@ class AdminApplication:
             if url.scheme or url.netloc:
                 raise ValueError("URL inválida")
             path = url.path
-            if path.startswith("/api/worker/carousels/"):
+            if path.startswith(("/api/worker/carousels/", "/api/worker/postiz/")):
                 expected = "Bearer " + self.worker_token if self.worker_token else ""
                 if not expected or not secrets.compare_digest(headers.get("authorization", ""), expected):
                     return self._error(404, "Rota não encontrada")
@@ -311,7 +378,7 @@ class AdminApplication:
         if path == "/api/carousel/jobs" and method == "GET":
             async with self.sessions() as session:
                 used = (await session.scalars(select(CarouselDraft.job_ids).where(
-                    CarouselDraft.status.in_(["queued", "generating", "draft", "posted"])
+                    CarouselDraft.status.in_(["queued", "generating", "draft", "approved", "posted"])
                 ))).all()
                 used_ids = {job_id for group in used for job_id in group}
                 rows = (await session.scalars(
@@ -342,7 +409,7 @@ class AdminApplication:
                        or job.editorial_status == "DESCARTADA" for job in jobs):
                     raise ValueError("Remova vagas encerradas, incompatíveis com o Brasil ou descartadas")
                 used = (await session.scalars(select(CarouselDraft.job_ids).where(
-                    CarouselDraft.status.in_(["queued", "generating", "draft", "posted"])
+                    CarouselDraft.status.in_(["queued", "generating", "draft", "approved", "posted"])
                 ))).all()
                 used_ids = {job_id for group in used for job_id in group}
                 if used_ids.intersection(request.job_ids):
@@ -361,7 +428,8 @@ class AdminApplication:
             request = CarouselPostedRequest.model_validate(self.portal._json(body))
             async with self.sessions.begin() as session:
                 draft = await session.get(CarouselDraft, request.draft_id, with_for_update=True)
-                if not draft or draft.status != "draft":
+                if not draft or not (draft.status == "draft" or
+                                     draft.status == "approved" and draft.postiz_state == "drafted"):
                     return self._error(409, "Somente um rascunho revisado pode ser marcado como postado")
                 draft.status, draft.posted_at = "posted", utcnow()
                 draft.post_url, draft.updated_at = request.post_url, utcnow()
@@ -382,6 +450,55 @@ class AdminApplication:
                 session.add(AuditEvent(event_type="admin_carousel_edit", actor="admin:web",
                                        after_json={"carousel_id": draft.id}))
                 return WebResponse.json(200, serialize(draft))
+        if path == "/api/carousels/approve" and method == "POST":
+            request = CarouselApproval.model_validate(self.portal._json(body))
+            if sum(len(image) for image in request.images) > 7_500_000:
+                raise ValueError("Carrossel excede o limite de tamanho")
+            for image in request.images:
+                validate_carousel_png(image)
+            async with self.sessions.begin() as session:
+                draft = await session.get(CarouselDraft, request.draft_id, with_for_update=True)
+                if not draft or draft.status != "draft" or not draft.result:
+                    return self._error(409, "Apenas um rascunho revisado pode ser aprovado")
+                if serialize(draft)["approval_revision"] != request.expected_revision:
+                    return self._error(409, "O carrossel mudou. Reabra antes de aprovar.")
+                if len(request.images) != len(draft.result["slides"]):
+                    raise ValueError("A quantidade de PNGs não corresponde às lâminas")
+                draft.status, draft.postiz_state = "approved", "queued"
+                draft.postiz_assets, draft.postiz_error = request.images, None
+                draft.updated_at = utcnow()
+                session.add(AuditEvent(event_type="admin_carousel_approved_for_postiz", actor="admin:web",
+                                       after_json={"carousel_id": draft.id, "job_ids": draft.job_ids,
+                                                   "slide_count": len(request.images)}))
+                return WebResponse.json(200, serialize(draft))
+        if path == "/api/carousels/postiz/retry" and method == "POST":
+            draft_id = int(self.portal._json(body).get("draft_id", 0))
+            async with self.sessions.begin() as session:
+                draft = await session.get(CarouselDraft, draft_id, with_for_update=True)
+                if not draft or draft.status != "approved" or draft.postiz_state != "failed" or not draft.postiz_assets:
+                    return self._error(409, "Confira o rascunho no Postiz antes de tentar novamente")
+                draft.postiz_state, draft.postiz_error = "queued", None
+                draft.updated_at = utcnow()
+                session.add(AuditEvent(event_type="admin_postiz_retry", actor="admin:web",
+                                       after_json={"carousel_id": draft.id}))
+                return WebResponse.json(200, serialize(draft))
+        if path == "/api/carousels/postiz/reconcile" and method == "POST":
+            request = CarouselPostizReconcile.model_validate(self.portal._json(body))
+            async with self.sessions.begin() as session:
+                draft = await session.get(CarouselDraft, request.draft_id, with_for_update=True)
+                if not draft or draft.status != "approved" or draft.postiz_state not in {"creating", "uncertain"}:
+                    return self._error(409, "Não há envio incerto para conciliar")
+                if request.post_id:
+                    draft.postiz_state, draft.postiz_post_id = "drafted", request.post_id
+                    draft.postiz_assets = None
+                else:
+                    draft.postiz_state = "failed"
+                    draft.postiz_error = "confirmed_absent"
+                draft.postiz_claimed_at, draft.updated_at = None, utcnow()
+                session.add(AuditEvent(event_type="admin_postiz_reconcile", actor="admin:web",
+                                       after_json={"carousel_id": draft.id, "postiz_post_id": request.post_id,
+                                                   "confirmed_absent": request.confirmed_absent}))
+                return WebResponse.json(200, serialize(draft))
         if path == "/api/carousels/retry" and method == "POST":
             draft_id = int(self.portal._json(body).get("draft_id", 0))
             async with self.sessions.begin() as session:
@@ -399,9 +516,12 @@ class AdminApplication:
             draft_id = int(self.portal._json(body).get("draft_id", 0))
             async with self.sessions.begin() as session:
                 draft = await session.get(CarouselDraft, draft_id, with_for_update=True)
-                if not draft or draft.status not in {"queued", "draft", "failed"}:
+                if not draft or draft.status not in {"queued", "draft", "failed", "approved"}:
                     return self._error(409, "Este pedido não pode ser descartado neste estado")
+                if draft.status == "approved" and draft.postiz_state != "queued":
+                    return self._error(409, "O envio já começou. Confira o Postiz antes de alterar.")
                 draft.status, draft.updated_at = "discarded", utcnow()
+                draft.postiz_assets = None
                 session.add(AuditEvent(event_type="admin_carousel_discard", actor="admin:web",
                                        after_json={"carousel_id": draft.id, "job_ids": draft.job_ids}))
                 return WebResponse.json(200, serialize(draft))
@@ -555,6 +675,69 @@ class AdminApplication:
 
     async def _worker_api(self, path: str, body: bytes) -> WebResponse:
         now = utcnow()
+        if path == "/api/worker/postiz/claim":
+            stale_before = now - timedelta(minutes=15)
+            async with self.sessions.begin() as session:
+                draft = await session.scalar(select(CarouselDraft).where(
+                    CarouselDraft.status == "approved",
+                    or_(CarouselDraft.postiz_state == "queued",
+                        and_(CarouselDraft.postiz_state == "uploading",
+                             CarouselDraft.postiz_claimed_at < stale_before)),
+                ).order_by(CarouselDraft.id).limit(1).with_for_update(skip_locked=True))
+                if not draft:
+                    return WebResponse.json(200, {"draft": None})
+                draft.postiz_state, draft.postiz_claimed_at = "uploading", now
+                draft.updated_at = now
+                return WebResponse.json(200, {"draft_id": draft.id, "caption": draft.result["caption"],
+                                              "slide_count": len(draft.postiz_assets or [])})
+        if path == "/api/worker/postiz/image":
+            data = self.portal._json(body)
+            draft_id, index = int(data.get("draft_id", 0)), int(data.get("index", -1))
+            async with self.sessions() as session:
+                draft = await session.get(CarouselDraft, draft_id)
+                if not draft or draft.status != "approved" or draft.postiz_state != "uploading":
+                    return self._error(409, "Carrossel não está em envio")
+                if index < 0 or index >= len(draft.postiz_assets or []):
+                    return self._error(404, "Lâmina não encontrada")
+                return WebResponse.json(200, {"image": draft.postiz_assets[index]})
+        if path == "/api/worker/postiz/creating":
+            draft_id = int(self.portal._json(body).get("draft_id", 0))
+            async with self.sessions.begin() as session:
+                draft = await session.get(CarouselDraft, draft_id, with_for_update=True)
+                if not draft or draft.postiz_state != "uploading":
+                    return self._error(409, "Envio não disponível")
+                draft.postiz_state, draft.updated_at = "creating", now
+                return WebResponse.json(200, {"ok": True})
+        if path == "/api/worker/postiz/complete":
+            data = self.portal._json(body)
+            draft_id, post_id = int(data.get("draft_id", 0)), str(data.get("post_id", ""))
+            if not post_id or len(post_id) > 255:
+                raise ValueError("ID do Postiz inválido")
+            async with self.sessions.begin() as session:
+                draft = await session.get(CarouselDraft, draft_id, with_for_update=True)
+                if not draft or draft.postiz_state != "creating":
+                    return self._error(409, "Criação não está pendente")
+                draft.postiz_state, draft.postiz_post_id = "drafted", post_id
+                draft.postiz_assets, draft.postiz_claimed_at = None, None
+                draft.updated_at = now
+                session.add(AuditEvent(event_type="carousel_postiz_draft_created", actor="homelab:postiz-bridge",
+                                       after_json={"carousel_id": draft.id, "postiz_post_id": post_id}))
+                return WebResponse.json(200, {"ok": True})
+        if path == "/api/worker/postiz/fail":
+            data = self.portal._json(body)
+            draft_id, code = int(data.get("draft_id", 0)), str(data.get("code", ""))
+            if code not in {"upload_failed", "create_rejected", "create_uncertain"}:
+                raise ValueError("Código de falha inválido")
+            async with self.sessions.begin() as session:
+                draft = await session.get(CarouselDraft, draft_id, with_for_update=True)
+                if not draft or draft.postiz_state not in {"uploading", "creating"}:
+                    return self._error(409, "Envio não está pendente")
+                draft.postiz_state = "uncertain" if draft.postiz_state == "creating" and code == "create_uncertain" else "failed"
+                draft.postiz_error, draft.postiz_claimed_at = code, None
+                draft.updated_at = now
+                session.add(AuditEvent(event_type="carousel_postiz_draft_failed", actor="homelab:postiz-bridge",
+                                       after_json={"carousel_id": draft.id, "code": code}))
+                return WebResponse.json(200, {"ok": True})
         if path == "/api/worker/carousels/claim":
             stale_before = now - timedelta(minutes=15)
             async with self.sessions.begin() as session:
