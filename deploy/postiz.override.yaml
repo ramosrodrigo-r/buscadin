@@ -1,0 +1,33 @@
+services:
+  postiz:
+    image: ghcr.io/gitroomhq/postiz-app@sha256:1e376ff2cb781022d528f171719cf174cf693a985a30cb40eefb13eae3ddda13
+    ports: !override
+      - "127.0.0.1:4007:5000"
+    environment:
+      MAIN_URL: ${POSTIZ_FRONTEND_URL}
+      FRONTEND_URL: ${POSTIZ_FRONTEND_URL}
+      NEXT_PUBLIC_BACKEND_URL: ${POSTIZ_FRONTEND_URL}/api
+      BACKEND_INTERNAL_URL: http://localhost:3000
+      JWT_SECRET: ${POSTIZ_JWT_SECRET}
+      DATABASE_URL: ${POSTIZ_DATABASE_URL}
+      REDIS_URL: redis://postiz-redis:6379
+      TEMPORAL_ADDRESS: temporal:7233
+      STORAGE_PROVIDER: local
+      UPLOAD_DIRECTORY: /uploads
+      NEXT_PUBLIC_UPLOAD_STATIC_DIRECTORY: /uploads
+      IS_GENERAL: "true"
+      DISABLE_REGISTRATION: "true"
+      RUN_CRON: "true"
+      DISALLOW_PLUS: "true"
+      STRIPE_PUBLISHABLE_KEY: ""
+      STRIPE_SECRET_KEY: ""
+      STRIPE_SIGNING_KEY: ""
+  postiz-postgres:
+    environment:
+      POSTGRES_PASSWORD: ${POSTIZ_DB_PASSWORD}
+  temporal-postgresql:
+    environment:
+      POSTGRES_PASSWORD: ${POSTIZ_TEMPORAL_DB_PASSWORD}
+  temporal:
+    environment:
+      POSTGRES_PWD: ${POSTIZ_TEMPORAL_DB_PASSWORD}
