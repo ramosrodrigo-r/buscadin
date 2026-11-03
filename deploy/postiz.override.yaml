@@ -1,6 +1,6 @@
 services:
   postiz:
-    image: ghcr.io/gitroomhq/postiz-app@sha256:1e376ff2cb781022d528f171719cf174cf693a985a30cb40eefb13eae3ddda13
+    image: buscadin-postiz-unified:1e376ff2-v2
     ports: !override
       - "127.0.0.1:4007:5000"
     environment:
@@ -19,6 +19,10 @@ services:
       DISABLE_REGISTRATION: "true"
       RUN_CRON: "true"
       DISALLOW_PLUS: "true"
+      INSTAGRAM_UNIFIED_APP_ID: ${INSTAGRAM_UNIFIED_APP_ID:-}
+      INSTAGRAM_UNIFIED_APP_SECRET: ${INSTAGRAM_UNIFIED_APP_SECRET:-}
+      INSTAGRAM_UNIFIED_CONFIG_ID: ${INSTAGRAM_UNIFIED_CONFIG_ID:-}
+      INSTAGRAM_UNIFIED_ACCOUNT_ID: ${INSTAGRAM_UNIFIED_ACCOUNT_ID:-}
       STRIPE_PUBLISHABLE_KEY: ""
       STRIPE_SECRET_KEY: ""
       STRIPE_SIGNING_KEY: ""

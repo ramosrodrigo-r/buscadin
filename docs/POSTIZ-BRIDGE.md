@@ -16,7 +16,10 @@ temporários são removidos do banco do Buscadin; o Postiz mantém sua cópia.
 ## Ativação
 
 Primeiro conecte um canal Instagram ao Postiz e gere uma API key em
-**Settings → Developers**. O Postiz exige um canal até para um rascunho. A
+**Settings → Developers**. Apps novos da Meta usam Unified login, que a versão
+original do Postiz ainda não aceita; a imagem derivada e seu processo de
+ativação estão em [POSTIZ-UNIFIED-OAUTH.md](POSTIZ-UNIFIED-OAUTH.md).
+O Postiz exige um canal até para um rascunho. A
 chave deve existir somente em
 `~/.config/buscadin-carousel/worker.env` no homelab (modo 0600):
 
@@ -32,8 +35,8 @@ retirar qualquer carrossel da fila. Ele acessa o Postiz em `127.0.0.1:4007`;
 a chave não vai ao navegador, à VPS nem ao contêiner de inferência do Hermes.
 Depois de preencher o arquivo, reinicie `buscadin-carousel-worker.service`.
 
-Na configuração atual, nenhum canal e nenhuma chave existem. Aprovações
-ficam na fila `queued` até a ativação, sem tentativas de envio. O Postiz usa
+Na configuração atual, a chave existe e funciona, mas ainda não há canal.
+Aprovações ficam na fila `queued` até a ativação, sem tentativas de envio. O Postiz usa
 armazenamento local, cujas URLs de mídia são privadas na Tailscale. O rascunho
 pode ser criado e revisto, mas a publicação no Instagram só funcionará quando
 as imagens tiverem URL pública HTTPS para a Meta buscar. O R2 da conta
