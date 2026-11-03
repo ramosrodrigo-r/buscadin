@@ -1,0 +1,35 @@
+# The only peers on this encrypted, unpublished network are admin and crawler.
+services:
+  crawler:
+    image: ${BUSCADIN_CRAWLER_IMAGE:?Set a versioned crawler image}
+    container_name: buscadin-crawler
+    command: [python, -m, buscadin_bot.web.crawler]
+    user: '10001:10001'
+    read_only: true
+    init: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+      - apparmor=buscadin-crawler
+      - seccomp=/etc/buscadin-crawler/seccomp.json
+    tmpfs:
+      - /tmp:rw,nosuid,noexec,size=268435456,mode=1777
+    shm_size: 256mb
+    mem_limit: 1536m
+    pids_limit: 256
+    cpus: 1.0
+    restart: unless-stopped
+    stop_grace_period: 30s
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8082/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+    networks:
+      private:
+        aliases: [buscadin-crawler]
+networks:
+  private:
+    external: true
+    name: buscadin-crawler-private

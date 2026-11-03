@@ -94,7 +94,7 @@ def turing_job_url(job_id: str, title: str) -> str:
 def job_identity(source: str, url: str) -> tuple[str, str] | None:
     """Keep stable company IDs, remove marketing parameters, reject other hosts."""
     parsed = urlsplit(url)
-    if parsed.scheme != "https" or parsed.hostname not in SOURCES[source][2] or parsed.username or parsed.port not in (None, 443):
+    if parsed.scheme != "https" or parsed.hostname not in SOURCES[source][2] or parsed.username is not None or parsed.password is not None or parsed.port not in (None, 443):
         return None
     patterns = {"micro1": r"^/post/([a-f0-9-]{36})/?$", "alignerr": r"^/(?:en/)?jobs/([a-f0-9-]{36})/?$",
                 "mercor": r"^/jobs/(list_[A-Za-z0-9_-]+)(?:/[^/]*)?/?$"}
@@ -291,7 +291,7 @@ class CompanyCrawler:
                         raise CrawlError("DNS da fonte aponta para endereço não público")
                     rules.append(f"MAP {host} {sorted(ips)[0]}")
                 rules.append("MAP * ~NOTFOUND")
-                browser = await playwright.chromium.launch(args=[
+                browser = await playwright.chromium.launch(chromium_sandbox=True, args=[
                     "--host-resolver-rules=" + ",".join(rules), "--no-proxy-server",
                     "--disable-quic",
                 ])

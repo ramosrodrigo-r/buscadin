@@ -107,3 +107,9 @@ da curadoria. Testes não consultam APIs externas.
 isolado e portas 8082/8083 para login, cadastro, prévia, publicação, consulta
 pública, retirada e logout reais no navegador. Confere cinco telas em
 1440, 390 e 320 pixels. Screenshots ficam em `.preview/admin/`.
+
+A coleta das quatro empresas usa o serviço privado descrito em
+[CRAWLER-ISOLATION.md](CRAWLER-ISOLATION.md). O painel não contém Chromium e não
+executa um navegador local se o serviço estiver indisponível. O worker valida o
+sandbox na inicialização e devolve dados limitados; a gravação e a deduplicação
+continuam no painel.

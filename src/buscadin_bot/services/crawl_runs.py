@@ -9,14 +9,15 @@ from sqlalchemy import select
 
 from buscadin_bot.db.models import AuditEvent, BotState, Job, utcnow
 from buscadin_bot.services.collector import Collector
-from buscadin_bot.sources.company_crawler import CompanyCrawler, CrawlError, SOURCES
+from buscadin_bot.sources.company_crawler import CrawlError, SOURCES
+from buscadin_bot.sources.remote_company import RemoteCompanyCrawler
 
 logger = logging.getLogger(__name__)
 STATE_KEY = "admin_manual_crawl"
 
 
 class CrawlRuns:
-    def __init__(self, sessions, *, factory=CompanyCrawler):
+    def __init__(self, sessions, *, factory=RemoteCompanyCrawler):
         self.sessions, self.factory = sessions, factory
         self.task = None
         self.state = None

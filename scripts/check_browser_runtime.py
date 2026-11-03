@@ -1,20 +1,8 @@
-"""Offline build preflight: Chromium must launch as the application user."""
+"""Offline check inside the deployed, restricted crawler container."""
 import asyncio
+import json
 
-from playwright.async_api import async_playwright
+from buscadin_bot.sources.browser_runtime import verify_browser_sandbox
 
-
-async def main():
-    async with async_playwright() as playwright:
-        browser = await playwright.chromium.launch()
-        try:
-            page = await browser.new_page()
-            await page.set_content("<title>Buscadin browser runtime</title>")
-            assert await page.title() == "Buscadin browser runtime"
-            print("Chromium runtime ready")
-        finally:
-            await browser.close()
-
-
-if __name__ == "__main__":
-    asyncio.run(main())
+if __name__ == '__main__':
+    print(json.dumps(asyncio.run(verify_browser_sandbox())))
